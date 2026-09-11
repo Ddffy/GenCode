@@ -1,0 +1,6 @@
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"fixture","source_path":null},"note_id":"b3da256b0cb3","scope":"workspace_fingerprint","status":"active","supersedes":null}
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"fixture","source_path":null},"note_id":"cc73ff0d1d42","scope":"workspace_fingerprint","status":"active","supersedes":null}
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"fixture","source_path":null},"note_id":"60ed714c8134","scope":"workspace_fingerprint","status":"active","supersedes":null}
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"fixture","source_path":null},"note_id":"2a1fcf00b838","scope":"workspace_fingerprint","status":"active","supersedes":null}
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"fixture","source_path":null},"note_id":"89284ceca26e","scope":"workspace_fingerprint","status":"active","supersedes":"missing-note-id"}
+{"evidence":{"created_at":"2026-06-24T00:00:00+00:00","evidence_anchor_hash":null,"session_id":"","source_path":null},"note_id":"672e1ac393de","scope":"workspace_fingerprint","status":"active","supersedes":null}

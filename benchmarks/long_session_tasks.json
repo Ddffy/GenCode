@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "description": "Long-session scripted tasks for comparing deterministic compaction with LLM handoff compaction.",
+  "tasks": [
+    {
+      "id": "multi-file-refactor",
+      "prompt": "Rename getUserName to get_user_name across the Python package and its tests. Read the files before editing, update all references, run the focused test, and finish only after verification.",
+      "fixture_repo": "tests/fixtures/long_session_multi_file_refactor",
+      "scripted_outputs": [
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/profile.py\",\"start\":1,\"end\":80}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/profile.py\"><old_text>def getUserName(user):</old_text><new_text>def get_user_name(user):</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/main.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/main.py\"><old_text>from src.profile import getUserName\nfrom src.report import render_user\n\n\ndef greeting(user):\n    return f\"Hello, {getUserName(user)}\"</old_text><new_text>from src.profile import get_user_name\nfrom src.report import render_user\n\n\ndef greeting(user):\n    return f\"Hello, {get_user_name(user)}\"</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/report.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/report.py\"><old_text>from src.profile import getUserName\n\n\ndef render_user(user):\n    return f\"User: {getUserName(user)}\"</old_text><new_text>from src.profile import get_user_name\n\n\ndef render_user(user):\n    return f\"User: {get_user_name(user)}\"</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"tests/test_profile.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"tests/test_profile.py\"><old_text>from src.main import greeting, report\nfrom src.profile import getUserName\n\n\ndef test_greeting_uses_user_name():\n    assert greeting({\"name\": \" ada \"}) == \"Hello, Ada\"\n    assert getUserName({\"name\": \"grace\"}) == \"Grace\"\n    assert report({\"name\": \"alan\"}) == \"User: Alan\"\n</old_text><new_text>from src.main import greeting, report\nfrom src.profile import get_user_name\n\n\ndef test_greeting_uses_user_name():\n    assert greeting({\"name\": \" ada \"}) == \"Hello, Ada\"\n    assert get_user_name({\"name\": \"grace\"}) == \"Grace\"\n    assert report({\"name\": \"alan\"}) == \"User: Alan\"\n</new_text></tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -m pytest tests/test_profile.py -q\"}}</tool>",
+        "<final>Renamed getUserName to get_user_name and verified the focused test.</final>"
+      ],
+      "allowed_tools": ["read_file", "patch_file", "run_shell", "search", "list_files"],
+      "step_budget": 24,
+      "context_window_override": 8000,
+      "expected_artifact": "src/main.py imports and calls get_user_name, with no getUserName left under src",
+      "verifier": "python3 -c \"from pathlib import Path; src = Path('src'); assert not any('getUserName' in p.read_text() for p in src.rglob('*.py')); assert 'get_user_name' in (src / 'main.py').read_text()\"",
+      "category": "long_session"
+    },
+    {
+      "id": "debug-and-fix",
+      "prompt": "Use error.log to diagnose the failing process function, fix the bug in src/handler.py, verify process([1, 2, 3]) returns 6, and summarize the fix.",
+      "fixture_repo": "tests/fixtures/long_session_debug_fix",
+      "scripted_outputs": [
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"error.log\",\"start\":1,\"end\":80}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/handler.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -c \\\"from src.handler import process; assert process([1,2,3]) == 6\\\"\"}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/handler.py\"><old_text>    for index in range(len(values) - 1):</old_text><new_text>    for index in range(len(values)):</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/handler.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -c \\\"from src.handler import process; assert process([1,2,3]) == 6\\\"\"}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"error.log\",\"start\":1,\"end\":80}}</tool>",
+        "<final>Fixed the off-by-one loop so process includes the last item.</final>"
+      ],
+      "allowed_tools": ["read_file", "patch_file", "run_shell", "search", "list_files"],
+      "step_budget": 14,
+      "context_window_override": 8000,
+      "expected_artifact": "src/handler.py sums every item in the input list",
+      "verifier": "python3 -c \"from src.handler import process; assert process([1,2,3]) == 6\"",
+      "category": "long_session"
+    },
+    {
+      "id": "add-endpoint-with-test",
+      "prompt": "Add a /health endpoint to the Flask app and add a focused test_health test. Read app.py and tests/test_app.py before editing, then run the new test.",
+      "fixture_repo": "tests/fixtures/long_session_health_endpoint",
+      "scripted_outputs": [
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\",\"start\":1,\"end\":200}}</tool>",
+        "<tool name=\"patch_file\" path=\"app.py\"><old_text>@app.route(\"/\")\ndef index():\n    return {\"status\": \"running\"}, 200\n</old_text><new_text>@app.route(\"/\")\ndef index():\n    return {\"status\": \"running\"}, 200\n\n\n@app.route(\"/health\")\ndef health():\n    return {\"status\": \"ok\"}, 200\n</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\",\"start\":1,\"end\":200}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"tests/test_app.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"tests/test_app.py\"><old_text>def test_index():\n    response = app.test_client().get(\"/\")\n    assert response.status_code == 200\n</old_text><new_text>def test_index():\n    response = app.test_client().get(\"/\")\n    assert response.status_code == 200\n\n\ndef test_health():\n    response = app.test_client().get(\"/health\")\n    assert response.status_code == 200\n    assert response.get_json() == {\"status\": \"ok\"}\n</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"tests/test_app.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -m pytest tests/test_app.py::test_health -q\"}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -m pytest tests/test_app.py -q\"}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"app.py\",\"start\":20,\"end\":120}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"tests/test_app.py\",\"start\":6,\"end\":120}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -c \\\"from app import app; assert app.test_client().get('/health').status_code == 200\\\"\"}}</tool>",
+        "<final>Added /health and verified test_health.</final>"
+      ],
+      "allowed_tools": ["read_file", "patch_file", "run_shell", "search", "list_files"],
+      "step_budget": 20,
+      "context_window_override": 8000,
+      "expected_artifact": "app.py exposes /health and tests/test_app.py contains test_health",
+      "verifier": "python3 -m pytest tests/test_app.py::test_health -q",
+      "category": "long_session"
+    },
+    {
+      "id": "config-migration",
+      "prompt": "Migrate the YAML schema_version from 1 to 2 for auth, api, worker, and gateway service configs. Read each config before editing and validate every service at the end.",
+      "fixture_repo": "tests/fixtures/long_session_config_migration",
+      "scripted_outputs": [
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"services/auth/config.yaml\",\"start\":1,\"end\":80}}</tool>",
+        "<tool name=\"patch_file\" path=\"services/auth/config.yaml\"><old_text>schema_version: 1</old_text><new_text>schema_version: 2</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"services/api/config.yaml\",\"start\":1,\"end\":80}}</tool>",
+        "<tool name=\"patch_file\" path=\"services/api/config.yaml\"><old_text>schema_version: 1</old_text><new_text>schema_version: 2</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"services/worker/config.yaml\",\"start\":1,\"end\":80}}</tool>",
+        "<tool name=\"patch_file\" path=\"services/worker/config.yaml\"><old_text>schema_version: 1</old_text><new_text>schema_version: 2</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"services/gateway/config.yaml\",\"start\":1,\"end\":80}}</tool>",
+        "<tool name=\"patch_file\" path=\"services/gateway/config.yaml\"><old_text>schema_version: 1</old_text><new_text>schema_version: 2</new_text></tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -c \\\"import yaml; [yaml.safe_load(open(f'services/{s}/config.yaml'))['schema_version'] == 2 for s in ['auth','api','worker','gateway']]\\\"\"}}</tool>",
+        "<final>Migrated all service configs to schema_version 2.</final>"
+      ],
+      "allowed_tools": ["read_file", "patch_file", "run_shell", "search", "list_files"],
+      "step_budget": 18,
+      "context_window_override": 8000,
+      "expected_artifact": "All four service config.yaml files have schema_version 2",
+      "verifier": "python3 -c \"import yaml; assert all(yaml.safe_load(open(f'services/{s}/config.yaml'))['schema_version'] == 2 for s in ['auth','api','worker','gateway'])\"",
+      "category": "long_session"
+    },
+    {
+      "id": "dependency-upgrade",
+      "prompt": "Upgrade requests from 2.28 to 2.31 and clean up the three source files that use deprecated or unsafe request patterns. Read each file before editing and verify syntax.",
+      "fixture_repo": "tests/fixtures/long_session_dependency_upgrade",
+      "scripted_outputs": [
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"requirements.txt\",\"start\":1,\"end\":40}}</tool>",
+        "<tool name=\"patch_file\" path=\"requirements.txt\"><old_text>requests==2.28</old_text><new_text>requests==2.31</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/client.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/client.py\"><old_text>    session.trust_env = True</old_text><new_text>    session.trust_env = False</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/api.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/api.py\"><old_text>    response = requests.get(url, verify=False)</old_text><new_text>    response = requests.get(url, verify=True, timeout=30)</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/fetcher.py\",\"start\":1,\"end\":120}}</tool>",
+        "<tool name=\"patch_file\" path=\"src/fetcher.py\"><old_text>    response = requests.get(url, timeout=None)</old_text><new_text>    response = requests.get(url, timeout=30)</new_text></tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"requirements.txt\",\"start\":1,\"end\":40}}</tool>",
+        "<tool>{\"name\":\"run_shell\",\"args\":{\"command\":\"python3 -c \\\"from pathlib import Path; import ast; assert Path('requirements.txt').read_text().strip() == 'requests==2.31'; [ast.parse(open(f).read()) for f in ['src/client.py','src/api.py','src/fetcher.py']]\\\"\"}}</tool>",
+        "<tool>{\"name\":\"read_file\",\"args\":{\"path\":\"src/api.py\",\"start\":1,\"end\":120}}</tool>",
+        "<final>Upgraded requests and fixed the three call sites.</final>"
+      ],
+      "allowed_tools": ["read_file", "patch_file", "run_shell", "search", "list_files"],
+      "step_budget": 20,
+      "context_window_override": 8000,
+      "expected_artifact": "requirements.txt pins requests==2.31 and all three source files parse",
+      "verifier": "python3 -c \"from pathlib import Path; import ast; assert Path('requirements.txt').read_text().strip() == 'requests==2.31'; [ast.parse(Path(f).read_text()) for f in ['src/client.py','src/api.py','src/fetcher.py']]\"",
+      "category": "long_session"
+    }
+  ]
+}

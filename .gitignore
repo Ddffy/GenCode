@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+uv.lock
+
+# Packaging
+*.egg-info/
+build/
+dist/
+
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Local scratch space
+tmp/
+.worktrees/
+# Legacy Pico state remains ignored during the naming migration.
+.pico/
+.gencode/
+.mini-pico/
+_local/
+artifacts/
+.kami-output/
+release/
+readme_intro_locked/
+
+# Local secrets and provider configuration
+.env
+.env.*
+!.env.example
+.pico.toml
+.gencode.toml
+!.gencode.toml.example
+
+# Local docs not intended for publication
+docs/**
+!docs/
+
+# Markdown files are kept locally but not uploaded to the repository
+*.md
+
+# Local image artifacts are kept locally but not uploaded
+*.png
+
+# OS files
+.DS_Store
+
+# IDE/project-local metadata
+.idea/
+
+# Root-level local test/benchmark logs
+/full_pytest*.log
+/repomap_live_run.log
+
+# Packaging metadata
+gencode.egg-info/
+# Legacy package metadata
+pico.egg-info/
+.gstack/

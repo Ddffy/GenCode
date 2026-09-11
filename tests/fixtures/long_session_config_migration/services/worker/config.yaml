@@ -1,0 +1,3 @@
+schema_version: 1
+service: worker
+timeout_seconds: 45

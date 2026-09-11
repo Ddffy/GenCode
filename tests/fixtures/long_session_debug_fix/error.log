@@ -1,0 +1,2 @@
+AssertionError: process([1, 2, 3]) returned 3, expected 6
+Traceback points to src/handler.py:7.

@@ -1,0 +1,186 @@
+[
+  {
+    "id": "symbol_repomap_builder",
+    "category": "symbol_lookup",
+    "query": "Where is RepoMapBuilder implemented?",
+    "gold_files": ["gencode/features/repomap/__init__.py"],
+    "gold_symbols": ["RepoMapBuilder"],
+    "live": true
+  },
+  {
+    "id": "symbol_bounded_source_walk",
+    "category": "symbol_lookup",
+    "query": "Where is collect_source_files implemented, the bounded BFS that scans parseable source files?",
+    "gold_files": ["gencode/features/repomap/graph.py"],
+    "gold_symbols": ["collect_source_files"],
+    "live": true
+  },
+  {
+    "id": "symbol_personalized_pagerank",
+    "category": "symbol_lookup",
+    "query": "Where is personalized_pagerank implemented?",
+    "gold_files": ["gencode/features/repomap/rank.py"],
+    "gold_symbols": ["personalized_pagerank"],
+    "live": true
+  },
+  {
+    "id": "symbol_tag_extraction",
+    "category": "symbol_lookup",
+    "query": "Where is extract_file_tags implemented?",
+    "gold_files": ["gencode/features/repomap/tags.py"],
+    "gold_symbols": ["extract_file_tags"],
+    "live": true
+  },
+  {
+    "id": "symbol_context_orchestrator",
+    "category": "symbol_lookup",
+    "query": "Which file implements ContextOrchestrator?",
+    "gold_files": ["gencode/core/context_orchestrator.py"],
+    "gold_symbols": ["ContextOrchestrator"]
+  },
+  {
+    "id": "symbol_permission_checker",
+    "category": "symbol_lookup",
+    "query": "Which file implements PermissionChecker?",
+    "gold_files": ["gencode/core/permissions.py"],
+    "gold_symbols": ["PermissionChecker"]
+  },
+  {
+    "id": "symbol_repetition_guard",
+    "category": "symbol_lookup",
+    "query": "Where is is_repeated_tool_call implemented?",
+    "gold_files": ["gencode/core/tool_repetition.py"],
+    "gold_symbols": ["is_repeated_tool_call"]
+  },
+  {
+    "id": "symbol_tool_result_artifact",
+    "category": "symbol_lookup",
+    "query": "Where is prepare_tool_result_observation implemented?",
+    "gold_files": ["gencode/core/tool_result_artifacts.py"],
+    "gold_symbols": ["prepare_tool_result_observation"]
+  },
+  {
+    "id": "behavior_prompt_sections",
+    "category": "behavior_lookup",
+    "query": "Which module assembles prompt sections and enforces a separate character budget for each section before a model call?",
+    "gold_files": ["gencode/core/context_manager.py"],
+    "gold_symbols": ["ContextManager"],
+    "live": true
+  },
+  {
+    "id": "behavior_run_evidence",
+    "category": "behavior_lookup",
+    "query": "Which module writes each run's task_state.json, trace.jsonl and report.json evidence files to disk?",
+    "gold_files": ["gencode/core/run_store.py"],
+    "gold_symbols": ["RunStore"],
+    "live": true
+  },
+  {
+    "id": "behavior_provider_usage",
+    "category": "behavior_lookup",
+    "query": "Which module implements the Anthropic-compatible and OpenAI-compatible HTTP clients and normalizes their usage token fields?",
+    "gold_files": ["gencode/providers/clients.py"],
+    "gold_symbols": ["AnthropicCompatibleModelClient", "OpenAICompatibleModelClient"],
+    "live": true
+  },
+  {
+    "id": "behavior_model_protocol",
+    "category": "behavior_lookup",
+    "query": "Which module parses the textual tool and final blocks returned by the model?",
+    "gold_files": ["gencode/core/model_output.py"],
+    "gold_symbols": ["parse", "parse_tool_blocks"],
+    "live": true
+  },
+  {
+    "id": "behavior_final_gate",
+    "category": "behavior_lookup",
+    "query": "Which module decides whether a final answer is ready or must continue because verification evidence is missing?",
+    "gold_files": ["gencode/core/final_readiness.py"],
+    "gold_symbols": ["evaluate_final_readiness"]
+  },
+  {
+    "id": "behavior_session_persistence",
+    "category": "behavior_lookup",
+    "query": "Which module atomically saves conversation session JSON and can load the latest session?",
+    "gold_files": ["gencode/core/session_store.py"],
+    "gold_symbols": ["SessionStore"]
+  },
+  {
+    "id": "behavior_provider_config",
+    "category": "behavior_lookup",
+    "query": "Which module resolves provider profiles from project configuration files and environment variables?",
+    "gold_files": ["gencode/config/__init__.py"],
+    "gold_symbols": ["resolve_provider_config"]
+  },
+  {
+    "id": "behavior_todo_state",
+    "category": "behavior_lookup",
+    "query": "Which module owns todo state, updates todo status and renders the ledger into the prompt?",
+    "gold_files": ["gencode/core/todo_ledger.py"],
+    "gold_symbols": ["TodoLedger"]
+  },
+  {
+    "id": "trace_context_pressure",
+    "category": "trace_to_code",
+    "query": "A trace reports pressure_tier tier3_summary. Locate the controller that computes that pressure tier from context usage.",
+    "gold_files": ["gencode/core/context_pressure.py"],
+    "gold_symbols": ["ContextPressureController", "pressure_tier"],
+    "live": true
+  },
+  {
+    "id": "trace_invalid_tool_arguments",
+    "category": "trace_to_code",
+    "query": "A trace reports tool_error_code invalid_arguments. Locate the action boundary that validates, authorizes and executes a requested tool.",
+    "gold_files": ["gencode/core/tool_executor.py"],
+    "gold_symbols": ["run_tool"],
+    "live": true
+  },
+  {
+    "id": "trace_provider_retry",
+    "category": "trace_to_code",
+    "query": "A provider request was retried after a transport failure. Locate the module that implements HTTP retries and retry metadata.",
+    "gold_files": ["gencode/providers/clients.py"],
+    "gold_symbols": ["_request_with_retries"]
+  },
+  {
+    "id": "trace_workspace_mismatch",
+    "category": "trace_to_code",
+    "query": "A resumed run reports workspace-mismatch. Locate the module that creates runtime checkpoints and captures workspace snapshots.",
+    "gold_files": ["gencode/core/runtime_checkpoints.py"],
+    "gold_symbols": ["RuntimeCheckpointsMixin"]
+  },
+  {
+    "id": "ripple_context_report",
+    "category": "edit_to_ripple",
+    "query": "After changing ContextManager, locate the module that builds metadata for all rendered prompt sections.",
+    "recent_paths": ["gencode/core/context_manager.py"],
+    "gold_files": ["gencode/core/context_report.py"],
+    "gold_symbols": ["ContextReportBuilder"],
+    "live": true
+  },
+  {
+    "id": "ripple_engine_helper",
+    "category": "edit_to_ripple",
+    "query": "After changing Engine, locate the helper module that executes a tool payload and records its result.",
+    "recent_paths": ["gencode/core/engine.py"],
+    "gold_files": ["gencode/core/engine_helpers.py"],
+    "gold_symbols": ["execute_tool_payload"],
+    "live": true
+  },
+  {
+    "id": "ripple_runtime_session",
+    "category": "edit_to_ripple",
+    "query": "After modifying the GenCode runtime, locate the module responsible for resume and clear session rebinding.",
+    "recent_paths": ["gencode/core/runtime.py"],
+    "gold_files": ["gencode/core/session_lifecycle.py"],
+    "gold_symbols": ["resume_runtime_session", "clear_runtime_session"]
+  },
+  {
+    "id": "ripple_large_tool_output",
+    "category": "edit_to_ripple",
+    "query": "After changing tool_executor, locate the module that decides whether a large tool result stays inline or is stored as an artifact.",
+    "recent_paths": ["gencode/core/tool_executor.py"],
+    "gold_files": ["gencode/core/tool_result_artifacts.py"],
+    "gold_symbols": ["prepare_tool_result_observation"]
+  }
+]
