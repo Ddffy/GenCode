@@ -51,6 +51,14 @@ class RuntimeCheckpointsMixin:
             file_freshness = memorylib.file_freshness(path, self.root)
             freshness[path] = file_freshness
             key_files.append({"path": path, "freshness": file_freshness})
+        git = getattr(self, "git", None)
+        git_state = {
+            "enabled": bool(git is not None and git.enabled),
+            "head": git.head() if git is not None and git.enabled else "",
+            "dirty_paths": sorted(git.status_paths())
+            if git is not None and git.enabled
+            else [],
+        }
         checkpoint = {
             "checkpoint_id": checkpoint_id,
             "parent_checkpoint_id": current.get("checkpoint_id", "") if current else "",
@@ -65,6 +73,7 @@ class RuntimeCheckpointsMixin:
             "freshness": freshness,
             "summary": f"{trigger}: {clip(str(user_message), 120)}",
             "runtime_identity": self.current_runtime_identity(),
+            "git": git_state,
         }
         state["items"][checkpoint_id] = checkpoint
         state["current_id"] = checkpoint_id

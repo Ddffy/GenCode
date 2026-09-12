@@ -21,6 +21,7 @@ from .compact import CompactManager
 from .context_manager import ContextManager
 from .context_orchestrator import ContextOrchestrator
 from .engine import Engine
+from .git_integration import GitIntegration
 from . import model_output, tool_executor
 from .native_messages import native_prompt_contract
 from .model_router import ModelClientRouter
@@ -66,7 +67,6 @@ CHECKPOINT_FULL_VALID_STATUS = "full-valid"
 CHECKPOINT_PARTIAL_STALE_STATUS = "partial-stale"
 CHECKPOINT_WORKSPACE_MISMATCH_STATUS = "workspace-mismatch"
 CHECKPOINT_SCHEMA_MISMATCH_STATUS = "schema-mismatch"
-
 @dataclass
 class PromptPrefix:
     # prefix 除了文本本身，还带一小份元数据，
@@ -107,6 +107,8 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         allowed_tools=None,
         final_readiness_mode="warn",
         before_final_hooks=None,
+        git_auto_commit=True,
+        git_auto_undo=True,
     ):
         self.model_client = model_client
         self.model_client_factory = model_client_factory
@@ -151,6 +153,8 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.allowed_tools = self._normalize_allowed_tools(allowed_tools)
         self.final_readiness_mode = str(final_readiness_mode or "warn")
         self.before_final_hooks = tuple(before_final_hooks or ())
+        self.git_auto_commit = bool(git_auto_commit)
+        self.git_auto_undo = bool(git_auto_undo)
         self.run_store = run_store or RunStore(
             Path(workspace.repo_root) / ".gencode" / "runs"
         )
@@ -174,6 +178,9 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
             self.session_event_bus.emit(
                 "session_started", {"workspace_root": workspace.repo_root}
             )
+        self.git = GitIntegration(
+            self.root, auto_commit=self.git_auto_commit, auto_undo=self.git_auto_undo, event_sink=self.session_event_bus.emit
+        )
         self.plan_mode = PlanModeController(self)
         self.engine = Engine(self)
         self.memory = memorylib.LayeredMemory(
@@ -503,7 +510,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
             - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
             - New files should be complete and runnable, including obvious imports.
             - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
-            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or agent with args={{}}.
+            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or agent with args={{}}. Git changes auto-commit when available; /undo reverts the latest safe change.
             - Use agent for bounded subagents. Explore is read-only; worker writes must stay inside write_scope.
             - Use send_message to continue an existing worker instead of spawning a fresh worker with missing context.
             - {skillslib.SKILL_FILE_CREATION_GUIDE}
@@ -880,6 +887,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
             "todo_changes": list(task_state.todo_changes),
             "evidence_summaries": dict(task_state.evidence_summaries),
             "workers": self.worker_manager.to_dict(),
+            "git": self.git.report(),
         }
 
     def tool_example(self, name):
@@ -923,6 +931,13 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         )
         self.self_authored_file_freshness.clear()
         self.session_store.save(self.session)
+
+    def undo_last_git_commit(self):
+        result = self.git.undo_last_commit(automatic=False)
+        if result.get("git_undo_performed"):
+            self.invalidate_stale_memory(); self.session_store.save(self.session)
+            return result.get("git_undo_message", "[git] undo complete")
+        return f"[git] undo skipped: {result.get('git_undo_reason', 'unknown')}"
 
     def path(self, raw_path):
         path = Path(raw_path)

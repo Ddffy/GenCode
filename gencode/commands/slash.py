@@ -40,6 +40,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
         ("sub",),
     ),
     SlashCommand("usage", "/usage", "Show model/provider usage metadata."),
+    SlashCommand("undo", "/undo", "Reset the latest safe GenCode Git commit."),
     SlashCommand("working-memory", "/working-memory", "Show working memory."),
     SlashCommand("exit", "/exit", "Exit GenCode.", ("quit",)),
 )

@@ -1,10 +1,11 @@
 """Tool-call validation, authorization, execution, and evidence recording."""
 import re
 
+from .git_integration import attach_tool_metadata
 from .governance import record_governance_decision
 from .tool_policy import ToolPolicyChecker
-from .tool_result_artifacts import prepare_tool_result_observation
 from .tool_repetition import repeated_tool_call_metadata
+from .tool_result_artifacts import prepare_tool_result_observation
 
 
 def run_tool(agent, name, args):
@@ -89,14 +90,15 @@ def run_tool(agent, name, args):
                 tool_status = "error"
                 tool_error_code = "tool_failed"
         agent.update_memory_after_tool(name, args, result)
-        agent._last_tool_result_metadata = _tool_result_metadata(
+        agent._last_tool_result_metadata = attach_tool_metadata(agent, name, args, _tool_result_metadata(
             tool, status=tool_status, error_code=tool_error_code,
             affected_paths=affected_paths, workspace_changed=workspace_changed,
             workspace_fingerprint=agent.workspace.fingerprint(),
-            diff_summary=diff_summary, **artifact_metadata, **pending_metadata,
-        )
+            diff_summary=diff_summary,
+            **artifact_metadata, **pending_metadata,
+        ), exit_code=exit_code if name == "run_shell" else None)
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
-        return result
+        return result + ("\n\n" + str(agent._last_tool_result_metadata["git_undo_message"]) if agent._last_tool_result_metadata.get("git_undo_performed") and agent._last_tool_result_metadata.get("git_undo_message") else "")
     except Exception as exc:
         after_snapshot = agent.capture_workspace_snapshot() if tool.risky else before_snapshot
         affected_paths, diff_summary = agent.diff_workspace_snapshots(before_snapshot, after_snapshot)
@@ -108,7 +110,7 @@ def run_tool(agent, name, args):
                 reason_code="sandbox_rejected_command", decision_type="sandbox",
                 original_reason=str(exc), security_event_type="sandbox",
             )
-        agent._last_tool_result_metadata = _tool_result_metadata(
+        agent._last_tool_result_metadata = attach_tool_metadata(agent, name, args, _tool_result_metadata(
             tool,
             status="partial_success" if workspace_changed else "error",
             error_code="tool_partial_success" if workspace_changed else "tool_failed",
@@ -117,15 +119,14 @@ def run_tool(agent, name, args):
             workspace_changed=workspace_changed,
             workspace_fingerprint=agent.workspace.fingerprint(),
             diff_summary=diff_summary,
-        )
+        ), exit_code=-1 if name == "run_shell" else None)
         agent.record_process_note_for_tool(name, agent._last_tool_result_metadata)
-        return f"error: tool {name} failed: {exc}"
-
+        message = f"error: tool {name} failed: {exc}"
+        return message + ("\n\n" + str(agent._last_tool_result_metadata["git_undo_message"]) if agent._last_tool_result_metadata.get("git_undo_performed") and agent._last_tool_result_metadata.get("git_undo_message") else "")
 
 def _run_shell_exit_code(result):
     match = re.search(r"exit_code:\s*(-?\d+)", str(result))
     return int(match.group(1)) if match else 0
-
 
 def _tool_result_metadata(
     tool, *, status, error_code="", security_event_type="", risk_level=None,
@@ -146,7 +147,6 @@ def _tool_result_metadata(
     if workspace_fingerprint is not None:
         metadata["workspace_fingerprint"] = workspace_fingerprint
     return metadata
-
 
 def _emit_permission_decision(agent, tool, args, decision):
     agent.session_event_bus.emit(

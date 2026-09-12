@@ -213,6 +213,8 @@ def build_agent(args):
     dream_min_sessions = getattr(args, "dream_min_sessions", 5)
     final_readiness_mode = getattr(args, "final_readiness", "warn")
     feature_flags = {"repo_map": not getattr(args, "no_repo_map", False)}
+    git_auto_commit = not getattr(args, "no_git_auto_commit", False)
+    git_auto_undo = not getattr(args, "no_git_auto_undo", False)
     #决定是否允许 Agent 向用户提问
     ask_user_callback = (
         None
@@ -244,6 +246,8 @@ def build_agent(args):
             ask_user_callback=ask_user_callback,
             final_readiness_mode=final_readiness_mode,
             feature_flags=feature_flags,
+            git_auto_commit=git_auto_commit,
+            git_auto_undo=git_auto_undo,
         )
         return agent
     session = None
@@ -279,6 +283,8 @@ def build_agent(args):
         ask_user_callback=ask_user_callback,
         final_readiness_mode=final_readiness_mode,
         feature_flags=feature_flags,
+        git_auto_commit=git_auto_commit,
+        git_auto_undo=git_auto_undo,
     )
     return agent
 
@@ -382,6 +388,16 @@ def build_arg_parser():
         "--no-repo-map",
         action="store_true",
         help="Disable the AST-based repository map in the prompt.",
+    )
+    parser.add_argument(
+        "--no-git-auto-commit",
+        action="store_true",
+        help="Do not auto-commit workspace changes when running inside a Git repository.",
+    )
+    parser.add_argument(
+        "--no-git-auto-undo",
+        action="store_true",
+        help="Do not reset the latest safe GenCode commit after a failed verification command.",
     )
     parser.add_argument(
         "--dream-interval",
@@ -519,6 +535,8 @@ def handle_repl_command(agent, user_input):
         )
     if user_input == "/usage":
         return True, False, _format_usage(agent)
+    if user_input == "/undo":
+        return True, False, agent.undo_last_git_commit()
     if user_input == "/model" or user_input.startswith("/model "):
         _, _, model = user_input.partition(" ")
         model = model.strip()
@@ -574,6 +592,11 @@ def _format_session_status(agent):
         worker_summary = ", ".join(
             f"{status}={count}" for status, count in sorted(counts.items())
         )
+    git = getattr(agent, "git", None)
+    if git is not None and git.enabled:
+        git_summary = f"enabled ({git.head()[:12] or 'unborn'}, {git.status_text()})"
+    else:
+        git_summary = getattr(git, "disabled_reason", "not_a_git_workspace")
     return "\n".join(
         [
             f"session id: {agent.session.get('id', '')}",
@@ -585,6 +608,7 @@ def _format_session_status(agent):
             f"last run dir: {run_dir}",
             f"resume status: {agent.resume_state.get('status', '-')}",
             f"worker summary: {worker_summary}",
+            f"git: {git_summary}",
         ]
     )
 

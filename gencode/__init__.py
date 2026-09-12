@@ -1,5 +1,6 @@
 from .cli import build_agent, build_arg_parser, build_welcome, interaction_mode, main
 from .core.engine import Engine
+from .core.git_integration import GitIntegration
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from .core.runtime import GenCode
 from .core.session_store import SessionStore
@@ -9,6 +10,7 @@ from .core.workspace import WorkspaceContext
 __all__ = [
     "AnthropicCompatibleModelClient",
     "Engine",
+    "GitIntegration",
     "GenCode",
     "build_agent",
     "build_arg_parser",

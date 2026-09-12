@@ -84,6 +84,10 @@ class Engine:
         agent.current_turn_id = task_state.task_id
         agent.current_run_id = task_state.run_id
         agent.current_run_dir = agent.run_store.start_run(task_state)
+        # Git 基线必须在本轮第一个工具动作前捕获；后续每个写操作都只
+        # 提交本轮新增的安全路径，验收失败时才能精确回到上一个 Agent 提交。
+        if hasattr(agent, "git"):
+            agent.git.begin_turn(task_state.run_id)
         agent.session_event_bus.emit(
             "turn_started",
             {
