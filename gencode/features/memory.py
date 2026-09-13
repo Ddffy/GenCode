@@ -646,7 +646,12 @@ def run_dream(agent, quiet=False, session_ids=None):
         max_steps=max(agent.max_steps, 20),
         max_new_tokens=max(agent.max_new_tokens, DREAM_MIN_NEW_TOKENS),
         secret_env_names=agent.secret_env_names,
-        feature_flags={**agent.feature_flags, "memory": False, "relevant_memory": False},
+        feature_flags={
+            **agent.feature_flags,
+            "memory": False,
+            "relevant_memory": False,
+            "typed_knowledge": False,
+        },
         write_scope=[str(memory_scope)],
         memory_dir=agent.memory_dir,
         auto_dream=False,

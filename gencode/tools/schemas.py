@@ -48,6 +48,36 @@ class SearchArgs(BaseModel):
         return v
 
 
+class KnowledgeReadArgs(BaseModel):
+    """On-demand read of an approved Wiki page or one of its sections."""
+
+    id: str
+    kind: str = "wiki"
+    section: str = ""
+    max_chars: int = 12_000
+
+    @field_validator("id")
+    @classmethod
+    def id_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("id must not be empty")
+        return v
+
+    @field_validator("kind")
+    @classmethod
+    def wiki_only(cls, v: str) -> str:
+        if v.strip().lower() != "wiki":
+            raise ValueError("knowledge_read only reads kind=wiki")
+        return v
+
+    @field_validator("max_chars")
+    @classmethod
+    def max_chars_in_range(cls, v: int) -> int:
+        if v < 1 or v > 24_000:
+            raise ValueError("max_chars must be in [1, 24000]")
+        return v
+
+
 class InspectImageArgs(BaseModel):
     path: str
     question: str

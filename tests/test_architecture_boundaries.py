@@ -6,7 +6,10 @@ from pathlib import Path
 def test_core_modules_stay_below_entropy_budget():
     root = Path(__file__).resolve().parents[1]
     budgets = {
-        "gencode/core/runtime.py": 950,
+        # Typed knowledge adds only assembly hooks here; policy lives in the
+        # bounded mixin below rather than growing the runtime monolith.
+        "gencode/core/runtime.py": 960,
+        "gencode/core/runtime_knowledge.py": 130,
         "gencode/core/before_final_hooks.py": 140,
         "gencode/core/evidence_summaries.py": 90,
         "gencode/core/final_readiness.py": 120,
@@ -22,6 +25,8 @@ def test_core_modules_stay_below_entropy_budget():
         "gencode/core/todo_ledger.py": 120,
         "gencode/core/worker_manager.py": 220,
         "gencode/core/context_manager.py": 420,
+        "gencode/core/knowledge_context.py": 60,
+        "gencode/core/knowledge_governance.py": 60,
         "gencode/core/context_budget_summary.py": 130,
         "gencode/core/context_handoff.py": 240,
         "gencode/core/context_orchestrator.py": 210,

@@ -4,6 +4,7 @@ import time
 
 from .before_final_hooks import run_before_final_hooks
 from .final_readiness import evaluate_final_readiness, readiness_notice
+from .knowledge_governance import maintain_knowledge_safely
 from .turn_transitions import emit_terminal_transition
 from .workspace import clip, now
 
@@ -215,6 +216,7 @@ def maintain_memory_safely(agent, task_state, final_answer):
         agent.emit_trace(
             task_state, "memory_maintenance_failed", {"error": clip(str(exc), 300)}
         )
+    maintain_knowledge_safely(agent, task_state, final_answer)
 
 
 def _turn_finished_event(task_state):

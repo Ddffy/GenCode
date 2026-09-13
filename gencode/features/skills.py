@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from .skill_io import read_skill_body as _read_skill_body, read_skill_metadata as _read_skill_metadata
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 SKILL_FILE_CREATION_GUIDE = """When creating GenCode skill files at .gencode/skills/<name>/SKILL.md or skills/<name>/SKILL.md, use frontmatter:
@@ -15,8 +16,6 @@ description: Audit a file
 user-invocable: true
 ---
 Audit $ARGUMENTS for risky changes."""
-
-
 @dataclass(frozen=True)
 class Skill:
     name: str
@@ -33,9 +32,14 @@ class Skill:
     model: str = ""
     paths: tuple[str, ...] = ()
     prompt_fn: Callable[[str], str] | None = None
-
+    prompt_loader: Callable[[], str] | None = None
     def render(self, arguments=""):
-        text = self.prompt_fn(str(arguments)) if self.prompt_fn else self.prompt
+        if self.prompt_fn:
+            text = self.prompt_fn(str(arguments))
+        elif self.prompt_loader:
+            text = self.prompt_loader()
+        else:
+            text = self.prompt
         replacements = {
             "$ARGUMENTS": str(arguments),
             "${GENCODE_SKILL_DIR}": self.skill_root,
@@ -76,13 +80,14 @@ def discover_skills(root, home=None):
         (Path(home) / ".gencode" / "skills", "user"),
         (Path(root) / "skills", "project"),
         (Path(root) / ".gencode" / "skills", "project"),
+        # Approved durable skills live beside Wiki/Spec records.  Candidate,
+        # rejected and quarantined records are filtered by load_skill_file.
+        (Path(root) / ".gencode" / "knowledge" / "skills", "knowledge"),
     ]
     for directory, source in search_roots:
         for skill in load_skills_from_dir(directory, source=source):
             skills[skill.name] = skill
     return dict(sorted(skills.items()))
-
-
 def load_skills_from_dir(skills_dir, source):
     skills_dir = Path(skills_dir).expanduser()
     if not skills_dir.exists():
@@ -94,14 +99,15 @@ def load_skills_from_dir(skills_dir, source):
         elif path.is_file() and path.suffix.lower() == ".md":
             files.append(path)
     return [skill for path in files if (skill := load_skill_file(path, source=source))]
-
-
 def load_skill_file(path, source):
     path = Path(path)
-    metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    metadata = _read_skill_metadata(path)
     default_name = path.parent.name if path.name == "SKILL.md" else path.stem
     name = str(metadata.get("name") or default_name).strip().lstrip("/")
     if not name:
+        return None
+    status = _string(metadata.get("status")).strip().lower()
+    if status and status != "active":
         return None
     return Skill(
         name=name,
@@ -116,10 +122,9 @@ def load_skill_file(path, source):
         paths=tuple(_list_value(metadata.get("paths"))),
         source=source,
         skill_root=str(path.parent),
-        prompt=body.strip(),
+        prompt="",
+        prompt_loader=lambda path=path: _read_skill_body(path),
     )
-
-
 def parse_frontmatter(text):
     match = FRONTMATTER_RE.match(str(text))
     if not match:
@@ -171,7 +176,13 @@ def parse_slash_command(text):
 
 
 def _parse_value(value):
-    value = value.strip().strip("\"'")
+    value = value.strip()
+    if value.startswith(("[", "{", '"')):
+        try:
+            return __import__("json").loads(value)
+        except (TypeError, ValueError):
+            pass
+    value = value.strip("\"'")
     if value.lower() in {"true", "yes"}:
         return True
     if value.lower() in {"false", "no"}:

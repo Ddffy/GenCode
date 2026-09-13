@@ -129,6 +129,14 @@ def test_context_report_builder_matches_existing_metadata_contract():
             ],
         },
         "skills": {"available_count": 0, "user_invocable_count": 0, "items": []},
+        "knowledge": {
+            "enabled": False,
+            "strategy": {},
+            "selected_spec_ids": [],
+            "selected_skill_ids": [],
+            "selected_wiki_ids": [],
+            "rejected": [],
+        },
         "current_request": {
             "text": "ship it",
             "raw_chars": 7,
@@ -161,6 +169,7 @@ def test_context_report_builder_matches_existing_metadata_contract():
         "relevant_memory",
         "history",
         "skills",
+        "knowledge",
         "current_request",
         "context_usage",
     ]

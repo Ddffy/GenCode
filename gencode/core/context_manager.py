@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..features import memory as memorylib, skills as skillslib
+from .knowledge_context import assemble_typed_knowledge
 from .context_report import ContextReportBuilder, RELEVANT_MEMORY_LIMIT
+from .context_memory import render_memory_section
 from .context_sections import (
     CURRENT_REQUEST_SECTION,
     MIN_SECTION_BUDGETS,
@@ -24,14 +26,11 @@ from .turn_history import TurnHistoryBuilder, tail_clip
 DEFAULT_TOTAL_BUDGET = 60000
 DEFAULT_SECTION_FLOORS = MIN_SECTION_BUDGETS
 DEFAULT_REDUCTION_ORDER = REDUCTION_ORDER
-
-
 @dataclass(frozen=True)
 class _PromptPressure:
     ratio: float
     tier: str
     source: str = "char_estimate"
-
 @dataclass
 class SectionRender:
     raw: str
@@ -72,9 +71,6 @@ class ContextManager:
         self.section_floors = self._compute_section_floors()
         self.reduction_order = tuple(reduction_order or REDUCTION_ORDER)
         self.history_builder = TurnHistoryBuilder(agent)
-        # The legacy API returns one rendered prompt.  Native providers also
-        # need the rendered section boundaries so Runtime can preserve a
-        # structured message history without rebuilding context a second time.
         self.last_rendered_sections = {}
 
     def _remember_rendered_sections(self, rendered):
@@ -108,10 +104,12 @@ class ContextManager:
         self.section_floors = self._compute_section_floors()
         memory_enabled = True
         relevant_memory_enabled = True
+        typed_knowledge_enabled = True
         context_reduction_enabled = True
         if hasattr(self.agent, "feature_enabled"):
             memory_enabled = self.agent.feature_enabled("memory")
             relevant_memory_enabled = self.agent.feature_enabled("relevant_memory")
+            typed_knowledge_enabled = self.agent.feature_enabled("typed_knowledge")
             context_reduction_enabled = self.agent.feature_enabled("context_reduction")
         memory_text = "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text())
         section_texts = {
@@ -121,8 +119,6 @@ class ContextManager:
             "history": "",
             CURRENT_REQUEST_SECTION: f"Current user request:\n{user_message}",
         }
-        # repo map 与 relevant_memory 同构：吃当前请求做个性化排序，
-        # 未启用/不支持时保持空串，组装时会跳过。
         if hasattr(self.agent, "build_repo_map_section"):
             section_texts["repo_map"] = str(self.agent.build_repo_map_section(user_message) or "")
         else:
@@ -139,6 +135,14 @@ class ContextManager:
         selected_notes = []
         if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
             selected_notes = self.agent.memory.retrieval_candidates(user_message, limit=RELEVANT_MEMORY_LIMIT)
+        selected_notes = assemble_typed_knowledge(
+            self.agent,
+            user_message,
+            section_texts,
+            selected_notes,
+            enabled=typed_knowledge_enabled,
+        )
+        self.section_floors = self._compute_section_floors()
 
         if not context_reduction_enabled:
             rendered = self._render_sections_without_reduction(section_texts, selected_notes=selected_notes)
@@ -218,7 +222,9 @@ class ContextManager:
         repo_map_raw = str(section_texts.get("repo_map", ""))
         return {
             "prefix": SectionRender(raw=section_texts["prefix"], budget=len(section_texts["prefix"]), rendered=section_texts["prefix"], details={}),
-            "memory": SectionRender(raw=section_texts["memory"], budget=len(section_texts["memory"]), rendered=section_texts["memory"], details={}),
+            "memory": self._memory_render(
+                section_texts["memory"], len(section_texts["memory"])
+            ),
             "skills": SectionRender(raw=section_texts["skills"], budget=len(section_texts["skills"]), rendered=section_texts["skills"], details={}),
             "repo_map": SectionRender(raw=repo_map_raw, budget=len(repo_map_raw), rendered=repo_map_raw, details={}),
             "relevant_memory": SectionRender(
@@ -248,6 +254,9 @@ class ContextManager:
             if section not in floors:
                 floors[section] = max(20, int(budget) // 4)
         floors.update(self._section_floor_overrides)
+        protected = str(getattr(self.agent, "_protected_spec_text", "") or "")
+        if protected:
+            floors["memory"] = max(int(floors.get("memory", 0)), len(protected))
         return floors
 
     def _render_sections(self, section_texts, budgets, selected_notes=None, pressure=None):
@@ -261,11 +270,17 @@ class ContextManager:
                 rendered[section] = self._render_relevant_memory(selected_notes or [], int(budget or 0))
             elif section == "history":
                 rendered[section] = self._render_history_section(int(budget or 0), pressure=pressure)
+            elif section == "memory":
+                rendered[section] = self._memory_render(section_texts[section], int(budget or 0))
             else:
                 raw = section_texts[section]
                 rendered_text = tail_clip(raw, int(budget)) if budget is not None else raw
                 rendered[section] = SectionRender(raw=raw, budget=int(budget) if budget is not None else 0, rendered=rendered_text, details={})
         return rendered
+
+    def _memory_render(self, raw, budget):
+        rendered, details = render_memory_section(self.agent, raw, budget)
+        return SectionRender(raw=str(raw or ""), budget=int(budget), rendered=rendered, details=details)
 
     def _prompt_pressure(self, prompt_chars):
         ratio = int(prompt_chars) / max(1, self.total_budget)
@@ -311,7 +326,6 @@ class ContextManager:
         per_note_budget = self._per_note_budget(budget, len(note_texts), header)
         rendered_notes = []
         while True:
-            # 让每条 note 平分这一段的预算，避免一条超长笔记把其他笔记都挤掉。
             rendered_notes = [tail_clip(text, per_note_budget) for text in note_texts]
             rendered = "\n".join([header] + [f"- {text}" for text in rendered_notes])
             if len(rendered) <= budget or per_note_budget <= 1:
@@ -371,8 +385,6 @@ class ContextManager:
         )
 
     def _assemble_prompt(self, rendered):
-        # 顺序是刻意设计的：稳定规则放前面，最新请求放最后。
-        # repo_map 为空（未启用/不支持）时整段跳过，不给 prompt 留空洞。
         return "\n\n".join(
             rendered[section].rendered
             for section in SECTION_ORDER

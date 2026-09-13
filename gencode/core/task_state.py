@@ -44,6 +44,8 @@ class TaskState:
     runtime_reminders: list = field(default_factory=list)
     todo_changes: list = field(default_factory=list)
     evidence_summaries: dict = field(default_factory=dict)
+    active_spec_ids: list = field(default_factory=list)
+    knowledge_selections: dict = field(default_factory=dict)
 
     @classmethod
     def create(cls, task_id, user_request, run_id=""):
@@ -71,6 +73,8 @@ class TaskState:
             runtime_reminders=list(data.get("runtime_reminders", [])),
             todo_changes=list(data.get("todo_changes", [])),
             evidence_summaries=dict(data.get("evidence_summaries", {}) or {}),
+            active_spec_ids=list(data.get("active_spec_ids", [])),
+            knowledge_selections=dict(data.get("knowledge_selections", {}) or {}),
         )
 
     def record_attempt(self):
@@ -126,4 +130,6 @@ class TaskState:
             "runtime_reminders": list(self.runtime_reminders),
             "todo_changes": list(self.todo_changes),
             "evidence_summaries": dict(self.evidence_summaries),
+            "active_spec_ids": list(self.active_spec_ids),
+            "knowledge_selections": dict(self.knowledge_selections),
         }

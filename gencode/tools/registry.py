@@ -1,8 +1,4 @@
-"""工具定义与执行辅助逻辑。
-
-可以把这个文件看成 agent 的能力白名单：模型能申请哪些动作、这些动作
-如何做参数校验，以及最终如何执行，都是在这里定义的。
-"""
+"""工具定义、参数校验与执行。"""
 
 import os
 import shutil
@@ -50,6 +46,7 @@ from .schemas import (
     ExitPlanModeArgs,
     InspectImageArgs,
     ListFilesArgs,
+    KnowledgeReadArgs,
     PatchFileArgs,
     ReadFileArgs,
     RunShellArgs,
@@ -63,7 +60,6 @@ from .schemas import (
     WriteFileArgs,
     first_error_message,
 )
-
 _TOOL_SCHEMAS = {
     "list_files": ListFilesArgs,
     "read_file": ReadFileArgs,
@@ -82,8 +78,8 @@ _TOOL_SCHEMAS = {
     "exit_plan_mode": ExitPlanModeArgs,
     "ask_user": AskUserArgs,
     "repo_map": RepoMapArgs,
+    "knowledge_read": KnowledgeReadArgs,
 }
-
 BASE_TOOL_SPECS = {
     "list_files": {
         "schema": {"path": "str='.'"},
@@ -115,6 +111,11 @@ BASE_TOOL_SPECS = {
         "risky": True,
         "description": "Replace one exact text block in a file.",
     },
+    "knowledge_read": {
+        "schema": {"id": "str", "kind": "str='wiki'", "section": "str=''", "max_chars": "int=12000"},
+        "risky": False,
+        "description": "Read an approved Wiki page or Markdown section on demand.",
+    },
     **media_tools.MEDIA_TOOL_SPECS,
     **TODO_TOOL_SPECS,
     **AGENT_TOOL_SPECS,
@@ -122,7 +123,6 @@ BASE_TOOL_SPECS = {
     **ASK_USER_TOOL_SPECS,
     **repomap_tools.REPO_MAP_TOOL_SPECS,
 }
-
 TOOL_EXAMPLES = {
     "list_files": '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
     "read_file": '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
@@ -130,6 +130,7 @@ TOOL_EXAMPLES = {
     "run_shell": '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
     "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
     "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
+    "knowledge_read": '<tool>{"name":"knowledge_read","args":{"id":"runtime-overview","section":"Execution"}}</tool>',
     **media_tools.MEDIA_TOOL_EXAMPLES,
     **TODO_TOOL_EXAMPLES,
     **AGENT_TOOL_EXAMPLES,
@@ -137,8 +138,6 @@ TOOL_EXAMPLES = {
     **ASK_USER_TOOL_EXAMPLES,
     **repomap_tools.REPO_MAP_TOOL_EXAMPLES,
 }
-
-
 def build_tool_registry(agent):
     # 工具不是动态发现的，而是显式注册的。
     # 这样模型看到的是一个有边界、可审计的动作集合。
@@ -153,12 +152,8 @@ def build_tool_registry(agent):
         for name, spec in BASE_TOOL_SPECS.items()
     }
     return tools
-
-
 def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
-
-
 def build_native_tool_definitions(agent):
     """Build provider-neutral JSON Schemas for native tool calling.
 
@@ -211,6 +206,15 @@ def validate_tool(agent, name, args):
 
     elif name == "search":
         agent.path(args.get("path", "."))
+    elif name == "knowledge_read":
+        if not hasattr(agent, "knowledge_store"):
+            raise ValueError("typed knowledge is unavailable")
+        if hasattr(agent, "feature_enabled") and not agent.feature_enabled("typed_knowledge"):
+            raise ValueError("typed knowledge is disabled")
+        if str(args.get("kind", "wiki")).lower() != "wiki":
+            raise ValueError("knowledge_read only reads kind=wiki")
+        if not agent.knowledge_store.get(args["id"], kind="wiki", include_inactive=True):
+            raise ValueError("unknown wiki")
 
     elif name in media_tools.MEDIA_TOOL_NAMES:
         media_tools.validate_media_runtime(agent, name, args)
@@ -322,6 +326,12 @@ def tool_search(agent, args):
     return "\n".join(matches) or "(no matches)"
 
 
+def tool_knowledge_read(agent, args):
+    return agent.knowledge_store.read_wiki(
+        args["id"],
+        section=args.get("section", ""),
+        max_chars=args.get("max_chars", 12_000),
+    )
 def tool_run_shell(agent, args):
     command = str(args.get("command", "")).strip()
     if not command:
@@ -392,6 +402,7 @@ _TOOL_RUNNERS = {
     "list_files": tool_list_files,
     "read_file": tool_read_file,
     "search": tool_search,
+    "knowledge_read": tool_knowledge_read,
     "run_shell": tool_run_shell,
     "write_file": tool_write_file,
     "patch_file": tool_patch_file,

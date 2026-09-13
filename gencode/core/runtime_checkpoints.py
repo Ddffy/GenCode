@@ -74,6 +74,7 @@ class RuntimeCheckpointsMixin:
             "summary": f"{trigger}: {clip(str(user_message), 120)}",
             "runtime_identity": self.current_runtime_identity(),
             "git": git_state,
+            "active_spec_ids": list(getattr(task_state, "active_spec_ids", [])),
         }
         state["items"][checkpoint_id] = checkpoint
         state["current_id"] = checkpoint_id

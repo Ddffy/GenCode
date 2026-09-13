@@ -21,6 +21,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("context", "/context", "Show prompt context usage."),
     SlashCommand("dream", "/dream", "Consolidate durable memory."),
     SlashCommand("history", "/history", "List saved sessions."),
+    SlashCommand("knowledge", "/knowledge [approve|reject] [kind:]id", "List or review typed durable knowledge."),
     SlashCommand("memory", "/memory", "Show durable memory index."),
     SlashCommand("mode", "/mode", "Show runtime mode."),
     SlashCommand("model", "/model [name]", "Show or switch the current model."),
@@ -32,6 +33,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("session", "/session", "Show session status."),
     SlashCommand("skills", "/skills", "List available GenCode skills.", ("sk",)),
     SlashCommand("skill", "/skill <name> [args]", "Load and run a GenCode skill."),
+    SlashCommand("spec", "/spec [use|clear] [id]", "List or bind durable task specifications."),
     SlashCommand("agents", "/agents", "Show subagent worker status.", ("agent",)),
     SlashCommand(
         "subagent",

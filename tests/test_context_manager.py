@@ -75,6 +75,7 @@ def test_context_manager_build_delegates_metadata_to_report_builder(tmp_path, mo
         "relevant_memory",
         "history",
         "skills",
+        "knowledge",
         "current_request",
         "context_usage",
         "pressure",

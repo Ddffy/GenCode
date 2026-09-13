@@ -1,6 +1,7 @@
 from .cli import build_agent, build_arg_parser, build_welcome, interaction_mode, main
 from .core.engine import Engine
 from .core.git_integration import GitIntegration
+from .features.knowledge import KnowledgeStore
 from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from .core.runtime import GenCode
 from .core.session_store import SessionStore
@@ -11,6 +12,7 @@ __all__ = [
     "AnthropicCompatibleModelClient",
     "Engine",
     "GitIntegration",
+    "KnowledgeStore",
     "GenCode",
     "build_agent",
     "build_arg_parser",

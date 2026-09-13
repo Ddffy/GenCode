@@ -80,6 +80,8 @@ class Engine:
         task_state.resume_status = agent.resume_state.get(
             "status", CHECKPOINT_NONE_STATUS
         )
+        if hasattr(agent, "active_spec_ids"):
+            task_state.active_spec_ids = list(agent.active_spec_ids())
         agent.current_task_state = task_state
         agent.current_turn_id = task_state.task_id
         agent.current_run_id = task_state.run_id
@@ -162,6 +164,11 @@ class Engine:
                         "workspace_fingerprint": memorylib.workspace_fingerprint(agent.root),
                     },
                 )
+            structured_knowledge = getattr(agent, "last_knowledge_retrieval", None)
+            if structured_knowledge is not None and hasattr(agent, "knowledge_store"):
+                knowledge_trace = agent.knowledge_store.trace_retrieval(structured_knowledge)
+                task_state.knowledge_selections = knowledge_trace
+                agent.emit_trace(task_state, "knowledge.retrieval", knowledge_trace)
             for file_read in memorylib.memory_file_read_payloads(agent.memory_dir, agent.root, reason="retrieval"):
                 agent.emit_trace(task_state, "memory.file_read", file_read)
             handle_prompt_checkpoints(self, task_state, user_message, prompt_metadata)

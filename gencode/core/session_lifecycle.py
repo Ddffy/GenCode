@@ -26,6 +26,7 @@ def clear_runtime_session(runtime):
         "workspace_root": runtime.workspace.repo_root,
         "history": [],
         "memory": memorylib.default_memory_state(),
+        "knowledge": {"active_specs": []},
     }
     _rebind(runtime, emit_started=True)
     return runtime.session["id"]
@@ -38,6 +39,8 @@ def _rebind(runtime, emit_started):
         runtime.session_store.event_path(runtime.session["id"]),
         redact=runtime.redact_artifact,
     )
+    if hasattr(runtime, "knowledge_store"):
+        runtime.knowledge_store.event_sink = runtime.session_event_bus.emit
     if emit_started:
         runtime.session_event_bus.emit(
             "session_started", {"workspace_root": runtime.workspace.repo_root}

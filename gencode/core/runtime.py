@@ -30,6 +30,7 @@ from .permissions import PermissionChecker
 from .run_store import RunStore
 from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
+from .runtime_knowledge import RuntimeKnowledgeMixin
 from .runtime_events import build_runtime_event
 from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
 from .session_events import SessionEventBus
@@ -59,7 +60,8 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
     "USER",
 )
 DEFAULT_FEATURE_FLAGS = dict(
-    memory=True, relevant_memory=True, context_reduction=True, prompt_cache=True, repo_map=True
+    memory=True, relevant_memory=True, typed_knowledge=True,
+    context_reduction=True, prompt_cache=True, repo_map=True
 )
 CHECKPOINT_SCHEMA_VERSION = "phase1-v1"
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
@@ -78,7 +80,7 @@ class PromptPrefix:
     built_at: str
 
 
-class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
+class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixin):
     def __init__(
         self,
         model_client,
@@ -181,6 +183,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.git = GitIntegration(
             self.root, auto_commit=self.git_auto_commit, auto_undo=self.git_auto_undo, event_sink=self.session_event_bus.emit
         )
+        self.initialize_knowledge()
         self.plan_mode = PlanModeController(self)
         self.engine = Engine(self)
         self.memory = memorylib.LayeredMemory(
@@ -261,6 +264,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
     def _ensure_session_shape(self):
         self.session.setdefault("history", [])
         self.session.setdefault("memory", memorylib.default_memory_state())
+        self.ensure_knowledge_session_shape()
         checkpoints = self.session.setdefault("checkpoints", {})
         if not isinstance(checkpoints, dict):
             checkpoints = {}
@@ -539,6 +543,8 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
         self.prefix = prefix_state.text
 
     def refresh_prefix(self, force=False):
+        if not force and self.__dict__.pop("_reuse_workspace_snapshot_once", False):
+            return dict(self._last_prefix_refresh)
         previous_hash = getattr(getattr(self, "prefix_state", None), "hash", None)
         previous_workspace_fingerprint = getattr(
             getattr(self, "prefix_state", None), "workspace_fingerprint", None
@@ -727,6 +733,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
                     task_state.evidence_summaries.setdefault("consumer_errors", []).append(error)
         self.run_store.write_task_state(task_state)
         return payload
+
     def infer_next_step(self, task_state):
         if task_state.status == "completed":
             return "No next step recorded."
@@ -878,6 +885,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
             "durable_rejections": list(self.last_durable_rejections),
             "durable_superseded": list(self.last_durable_superseded),
             "memory_maintenance": dict(self.last_memory_maintenance),
+            **self.knowledge_report_fields(),
             "redacted_env": self.detected_secret_env_summary(),
             "compactions": list(self.session.get("compactions", [])),
             "artifact_graph": dict(task_state.artifact_graph),
@@ -924,6 +932,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin):
 
     def reset(self):
         self.session["history"] = []
+        self.reset_knowledge_state()
         self.session["memory"].clear()
         self.session["memory"].update(memorylib.default_memory_state())
         self.memory = memorylib.LayeredMemory(

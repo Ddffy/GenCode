@@ -212,7 +212,10 @@ def build_agent(args):
     dream_interval = getattr(args, "dream_interval", 24.0)
     dream_min_sessions = getattr(args, "dream_min_sessions", 5)
     final_readiness_mode = getattr(args, "final_readiness", "warn")
-    feature_flags = {"repo_map": not getattr(args, "no_repo_map", False)}
+    feature_flags = {
+        "repo_map": not getattr(args, "no_repo_map", False),
+        "typed_knowledge": not getattr(args, "no_typed_knowledge", False),
+    }
     git_auto_commit = not getattr(args, "no_git_auto_commit", False)
     git_auto_undo = not getattr(args, "no_git_auto_undo", False)
     #决定是否允许 Agent 向用户提问
@@ -390,6 +393,11 @@ def build_arg_parser():
         help="Disable the AST-based repository map in the prompt.",
     )
     parser.add_argument(
+        "--no-typed-knowledge",
+        action="store_true",
+        help="Disable Skill/Wiki/Spec durable knowledge retrieval and deposition.",
+    )
+    parser.add_argument(
         "--no-git-auto-commit",
         action="store_true",
         help="Do not auto-commit workspace changes when running inside a Git repository.",
@@ -487,6 +495,41 @@ def handle_repl_command(agent, user_input):
         return True, False, HELP_DETAILS
     if user_input == "/memory":
         return True, False, agent.memory_command_text()
+    if command_name == "knowledge":
+        action, _, record_ref = command_args.partition(" ")
+        action = action.strip().lower()
+        record_ref = record_ref.strip()
+        if not action or action == "list":
+            return True, False, agent.knowledge_command_text()
+        if action not in {"approve", "reject"} or not record_ref:
+            return True, False, "Usage: /knowledge [approve|reject] [kind:]id"
+        kind = None
+        record_id = record_ref
+        if ":" in record_ref:
+            possible_kind, _, possible_id = record_ref.partition(":")
+            if possible_kind in {"skill", "wiki", "spec"}:
+                kind, record_id = possible_kind, possible_id
+        try:
+            if action == "approve":
+                return True, False, agent.approve_knowledge(record_id, kind=kind)
+            return True, False, agent.reject_knowledge(record_id, kind=kind)
+        except (KeyError, ValueError) as exc:
+            return True, False, f"error: {exc}"
+    if command_name == "spec":
+        action, _, record_id = command_args.partition(" ")
+        action = action.strip().lower()
+        record_id = record_id.strip()
+        if not action or action == "list":
+            current = agent.active_spec_ids()
+            return True, False, "Bound specs: " + (", ".join(current) if current else "none")
+        try:
+            if action == "use" and record_id:
+                return True, False, agent.bind_spec(record_id)
+            if action == "clear":
+                return True, False, agent.clear_spec(record_id)
+        except ValueError as exc:
+            return True, False, f"error: {exc}"
+        return True, False, "Usage: /spec [use|clear] [id]"
     if user_input == "/working-memory":
         return True, False, agent.memory_text()
     if user_input.startswith("/remember"):

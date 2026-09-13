@@ -7,8 +7,12 @@ import sys
 from pathlib import Path
 
 _KEYWORD = r"(?:key|token|secret|password|api)"
-_LONG_HEX = r"[A-Fa-f0-9]{32,}"
-_LONG_BASE64 = r"[A-Za-z0-9+/]{40,}={0,2}"
+# Possessive quantifiers prevent the keyword/credential compound expression
+# from repeatedly backtracking over a long ordinary source line.  Without
+# this, a 10k-character identifier-like line can turn a quality check into an
+# accidental quadratic scan.
+_LONG_HEX = r"[A-Fa-f0-9]{32,}+"
+_LONG_BASE64 = r"[A-Za-z0-9+/]{40,}+={0,2}"
 
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
@@ -19,6 +23,7 @@ SECRET_PATTERNS = [
         rf"(?i)(?:{_KEYWORD}.{{0,20}}(?:{_LONG_HEX}|{_LONG_BASE64})|(?:{_LONG_HEX}|{_LONG_BASE64}).{{0,20}}{_KEYWORD})"
     ),
 ]
+_SECRET_HINT = re.compile(r"(?i)(?:key|token|secret|password|api)|sk-|AKIA|ghp_|xox")
 
 RELATIVE_DATE_PATTERN = re.compile(r"(?i)\b(tomorrow|yesterday|next week|last week)\b|今天|明天|昨天|下周|上周")
 

@@ -45,6 +45,7 @@ class ContextReportBuilder:
             "relevant_memory": self._relevant_memory_metadata(rendered, selected_notes),
             "history": self._history_metadata(rendered),
             "skills": self._skills_metadata(),
+            "knowledge": self._knowledge_metadata(),
             "current_request": {
                 "text": user_message,
                 "raw_chars": len(user_message),
@@ -100,4 +101,26 @@ class ContextReportBuilder:
             "available_count": len(items),
             "user_invocable_count": sum(1 for item in items if item["user_invocable"]),
             "items": items,
+        }
+
+    def _knowledge_metadata(self):
+        store = getattr(self.agent, "knowledge_store", None)
+        retrieval = getattr(self.agent, "last_knowledge_retrieval", None)
+        if store is None or retrieval is None:
+            return {
+                "enabled": False,
+                "strategy": {},
+                "selected_spec_ids": [],
+                "selected_skill_ids": [],
+                "selected_wiki_ids": [],
+                "rejected": [],
+            }
+        traced = store.trace_retrieval(retrieval)
+        return {
+            "enabled": True,
+            "strategy": traced["strategy"],
+            "selected_spec_ids": [row["id"] for row in traced["specs"]],
+            "selected_skill_ids": [row["id"] for row in traced["skills"]],
+            "selected_wiki_ids": [row["id"] for row in traced["wiki"]],
+            "rejected": list(traced["rejected"]),
         }
