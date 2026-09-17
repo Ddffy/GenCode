@@ -19,6 +19,7 @@ from .engine_helpers import (
     execute_tool_payload,
     complete_runtime_model,
     handle_prompt_checkpoints,
+    record_skipped_tool_call,
     request_step_limit_summary,
     should_retry_model_error,
 )
@@ -338,15 +339,26 @@ class Engine:
                 tools = [payload] if kind == "tool" else list(payload)
                 executed_tools = 0
                 for tool_payload in tools:
-                    if tool_steps >= agent.max_steps:
-                        break
+                    if tool_steps >= agent.max_steps or agent.abort_requested:
+                        # The budget and abort checks are per call, so a batch can be
+                        # cut short in the middle. The remaining calls still get a
+                        # recorded result: an unpaired tool_use block makes every
+                        # later request fail, which breaks the whole session rather
+                        # than just ending this turn.
+                        reason = (
+                            "step_budget_exhausted"
+                            if tool_steps >= agent.max_steps
+                            else "aborted"
+                        )
+                        yield from record_skipped_tool_call(
+                            self, task_state, tool_payload, reason=reason
+                        )
+                        continue
                     yield from execute_tool_payload(
                         self, task_state, user_message, tool_payload
                     )
                     tool_steps += 1
                     executed_tools += 1
-                    if agent.abort_requested:
-                        break
                 if agent.abort_requested:
                     yield from finish_stopped_run(
                         self,

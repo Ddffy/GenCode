@@ -69,7 +69,32 @@ def build_native_messages(agent, user_message, prompt=None):
 
 
 def _native_history_tail(history, max_items=16):
-    source = list(history[-max_items:])
+    """Take the most recent items without splitting a tool-call group.
+
+    A blind positional slice can begin inside a group, leaving tool results whose
+    ``tool_use`` was cut away. Anthropic rejects that with "each tool_result block
+    must have a corresponding tool_use block" and OpenAI-shaped APIs reject the
+    equivalent, so the window is first grown backwards over any leading tool
+    results to include the assistant message that owns them. A turn that issues
+    several tool calls at once is what shifts the alignment and makes this
+    reachable.
+    """
+    items = list(history)
+    start = max(0, len(items) - max_items)
+    while start > 0 and str(items[start].get("role")) == "tool":
+        start -= 1
+    source = items[start:]
+    known_call_ids = {
+        str(call.get("id") or call.get("call_id") or "")
+        for item in source
+        if str(item.get("role")) == "assistant"
+        for call in (item.get("tool_calls") or ())
+    }
+    result_call_ids = {
+        str(item["tool_call_id"])
+        for item in source
+        if str(item.get("role")) == "tool" and item.get("tool_call_id")
+    }
     messages = []
     for item in source:
         role = str(item.get("role", ""))
@@ -77,6 +102,14 @@ def _native_history_tail(history, max_items=16):
         if role == "assistant" and item.get("tool_calls"):
             calls = []
             for call in item.get("tool_calls") or ():
+                call_id = str(call.get("id") or call.get("call_id") or "")
+                # History recorded before the skipped-call guard existed can hold
+                # calls whose results were never written (a batch cut short by the
+                # step budget or an abort). A provider rejects the whole request for
+                # one unpaired tool_use, so the call is dropped from the request
+                # rather than sent; otherwise the session can never be resumed.
+                if call_id and call_id not in result_call_ids:
+                    continue
                 function = call.get("function") or {}
                 args = call.get("args", function.get("arguments", {}))
                 if isinstance(args, str):
@@ -86,7 +119,7 @@ def _native_history_tail(history, max_items=16):
                         args = {"_raw_arguments": args}
                 calls.append(
                     {
-                        "id": str(call.get("id") or call.get("call_id") or ""),
+                        "id": call_id,
                         "type": "function",
                         "function": {
                             "name": str(call.get("name") or function.get("name") or ""),
@@ -94,12 +127,21 @@ def _native_history_tail(history, max_items=16):
                         },
                     }
                 )
-            messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
+            if calls:
+                messages.append({"role": "assistant", "content": content or None, "tool_calls": calls})
+            elif content:
+                messages.append({"role": "assistant", "content": str(content)})
         elif role == "tool" and item.get("tool_call_id"):
+            call_id = str(item["tool_call_id"])
+            # Stored history can still lack the owning call (for example a crash
+            # between recording the call and its results), so an orphan is dropped
+            # here rather than sent as a payload every provider rejects.
+            if call_id not in known_call_ids:
+                continue
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": str(item["tool_call_id"]),
+                    "tool_call_id": call_id,
                     "name": str(item.get("name", "")),
                     "content": str(content),
                 }

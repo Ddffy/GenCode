@@ -145,6 +145,56 @@ def execute_tool_payload(engine, task_state, user_message, payload):
     }
 
 
+SKIPPED_TOOL_MESSAGE = "error: skipped, this call did not run (per-turn tool budget or abort)"
+
+
+def record_skipped_tool_call(engine, task_state, payload, *, reason):
+    """Record a result for a call that was never executed.
+
+    A budget or abort check happens per call, so a batch of tool calls can be cut
+    short in the middle. Every tool_use block must be followed by a matching
+    tool_result, or providers reject the next request outright ("tool_use ids were
+    found without tool_result blocks immediately after"), which leaves the whole
+    session unusable rather than failing just the current turn. So the remaining
+    calls still get a recorded result: it keeps the history pairable and tells the
+    model why the results it asked for are missing.
+    """
+    agent = engine.runtime
+    name = str(payload.get("name", ""))
+    args = payload.get("args", {}) or {}
+    metadata = {
+        "tool_status": "rejected",
+        "tool_error_code": reason,
+        "workspace_changed": False,
+        "affected_paths": [],
+        "read_only": False,
+        "risk_level": "low",
+        "security_event_type": "",
+        "diff_summary": [],
+    }
+    history_item = {
+        "role": "tool",
+        "name": name,
+        "args": args,
+        "content": SKIPPED_TOOL_MESSAGE,
+        "created_at": now(),
+        **metadata,
+    }
+    if payload.get("id"):
+        history_item["tool_call_id"] = str(payload["id"])
+    agent.record(history_item)
+    agent.emit_trace(
+        task_state, "tool_skipped", {"name": name, "args": args, "reason": reason}
+    )
+    yield {
+        "type": "tool_result",
+        "run_id": task_state.run_id,
+        "name": name,
+        "content": SKIPPED_TOOL_MESSAGE,
+        "metadata": metadata,
+    }
+
+
 def should_retry_model_error(exc, provider_retries):
     if not isinstance(exc, ProviderError):
         return False
