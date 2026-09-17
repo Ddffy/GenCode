@@ -20,6 +20,12 @@ gencode-tui = "gencode.tui.main:main"
 
 [project.optional-dependencies]
 map = ["tree-sitter>=0.22", "tree-sitter-language-pack>=0.9.0"]
+rag = ["sentence-transformers>=3.0.0"]
+all = [
+  "tree-sitter>=0.22",
+  "tree-sitter-language-pack>=0.9.0",
+  "sentence-transformers>=3.0.0",
+]
 
 [dependency-groups]
 dev = [

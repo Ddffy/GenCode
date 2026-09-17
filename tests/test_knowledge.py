@@ -54,7 +54,11 @@ def test_wiki_uses_markdown_truth_and_fts_supports_chinese_queries(tmp_path):
     assert [row["id"] for row in result["wiki"]] == ["feishu-lane"]
     assert (store.root / "wiki" / "feishu-lane.md").exists()
     assert store.index_path.exists()
-    assert result["strategy"]["wiki"] in {"fts5_bm25", "lexical_fallback"}
+    assert result["strategy"]["wiki"] in {
+        "sparse_dense_rrf",
+        "fts5_bm25",
+        "lexical_fallback",
+    }
 
 
 def test_candidate_never_enters_prompt_until_approved(tmp_path):

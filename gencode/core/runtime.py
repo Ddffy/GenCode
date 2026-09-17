@@ -31,6 +31,7 @@ from .run_store import RunStore
 from .runtime_consumers import default_runtime_consumers
 from .runtime_checkpoints import RuntimeCheckpointsMixin
 from .runtime_knowledge import RuntimeKnowledgeMixin
+from .runtime_retrieval import RuntimeRetrievalMixin
 from .runtime_events import build_runtime_event
 from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
 from .session_events import SessionEventBus
@@ -61,7 +62,7 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
 )
 DEFAULT_FEATURE_FLAGS = dict(
     memory=True, relevant_memory=True, typed_knowledge=True,
-    context_reduction=True, prompt_cache=True, repo_map=True
+    context_reduction=True, prompt_cache=True, repo_map=True, hybrid_retrieval=True
 )
 CHECKPOINT_SCHEMA_VERSION = "phase1-v1"
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
@@ -80,7 +81,7 @@ class PromptPrefix:
     built_at: str
 
 
-class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixin):
+class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixin, RuntimeRetrievalMixin):
     def __init__(
         self,
         model_client,
@@ -643,13 +644,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         )
 
     def build_repo_map_section(self, user_message):
-        recent = self.memory.to_dict()["working"]["recent_files"]
-        text, _meta = self.build_repo_map(
-            query=user_message,
-            budget_chars=repomaplib.DEFAULT_MAP_BUDGET_CHARS,
-            recent_paths=recent,
-        )
-        return text
+        return self.build_retrieval_section(user_message)
 
     def prompt(self, user_message):
         prompt, _ = self._build_prompt_and_metadata(user_message)

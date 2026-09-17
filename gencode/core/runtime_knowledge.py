@@ -1,5 +1,6 @@
 """Runtime integration for typed Skill, Wiki, and Spec knowledge."""
 
+from ..config import resolve_project_retrieval_config
 from ..features import knowledge as knowledgelib
 from ..features import skills as skillslib
 
@@ -12,8 +13,11 @@ class RuntimeKnowledgeMixin:
             self.root / ".gencode" / "knowledge",
             self.root,
             event_sink=self.session_event_bus.emit,
+            retrieval_config=resolve_project_retrieval_config(start=self.root),
         )
         self.last_knowledge_retrieval = None
+        self.last_code_retrieval = None
+        self.last_citation_validation = {}
         self.last_knowledge_maintenance = {
             "candidates": [],
             "quarantined": [],
@@ -102,12 +106,16 @@ class RuntimeKnowledgeMixin:
         )
         return {
             "knowledge_retrieval": retrieval,
+            "code_retrieval": dict(self.last_code_retrieval or {}),
             "knowledge_maintenance": dict(self.last_knowledge_maintenance),
+            "citation_validation": dict(self.last_citation_validation or {}),
         }
 
     def reset_knowledge_state(self):
         self.session["knowledge"] = {"active_specs": []}
         self.last_knowledge_retrieval = None
+        self.last_code_retrieval = None
+        self.last_citation_validation = {}
         self.last_knowledge_maintenance = {
             "candidates": [],
             "quarantined": [],

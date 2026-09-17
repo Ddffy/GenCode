@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..features.retrieval.config import retrieval_config_from_env
 from ..features.sandbox import resolve_sandbox_config as resolve_sandbox_values
 
 if sys.version_info >= (3, 11):
@@ -363,13 +364,18 @@ def resolve_project_sandbox_config(
     return resolve_sandbox_values(values)
 
 
+def resolve_project_retrieval_config(*, start=".", config_path=None):
+    file_values = _load_config_values(start=start, explicit_path=config_path)
+    return retrieval_config_from_env(file_values.get("retrieval", {}))
+
+
 def normalize_provider_name(provider: str | None) -> str:
     normalized = (provider or DEFAULT_PROVIDER).strip().lower()
     return PROVIDER_ALIASES.get(normalized, normalized)
 
 
 def _load_config_values(start: str | Path, explicit_path: str | None) -> dict[str, Any]:
-    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}}
+    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}, "retrieval": {}}
     if explicit_path:
         _merge_config_values(
             values, _read_config_file(Path(explicit_path).expanduser())
@@ -391,7 +397,7 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise ValueError(f"could not read GenCode config file {path}: {exc}") from exc
 
-    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}}
+    values: dict[str, Any] = {"top": {}, "providers": {}, "sandbox": {}, "retrieval": {}}
     if "provider" in data:
         values["top"]["provider"] = data["provider"]
 
@@ -405,6 +411,10 @@ def _read_config_file(path: Path) -> dict[str, Any]:
     if isinstance(sandbox, dict):
         values["sandbox"] = dict(sandbox)
 
+    retrieval = data.get("retrieval", {})
+    if isinstance(retrieval, dict):
+        values["retrieval"] = dict(retrieval)
+
     for name in ("openai", "anthropic", "deepseek"):
         section = data.get(name, {})
         if isinstance(section, dict):
@@ -415,6 +425,7 @@ def _read_config_file(path: Path) -> dict[str, Any]:
 def _merge_config_values(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     target["top"].update(incoming.get("top", {}))
     target["sandbox"].update(incoming.get("sandbox", {}))
+    target["retrieval"].update(incoming.get("retrieval", {}))
     for name, section in incoming.get("providers", {}).items():
         target["providers"].setdefault(name, {}).update(section)
 

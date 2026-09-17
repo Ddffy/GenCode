@@ -10,6 +10,9 @@ def test_core_modules_stay_below_entropy_budget():
         # bounded mixin below rather than growing the runtime monolith.
         "gencode/core/runtime.py": 960,
         "gencode/core/runtime_knowledge.py": 130,
+        # Citation validation lives here so the knowledge mixin stays an assembly
+        # hook instead of growing the runtime monolith.
+        "gencode/core/citation_report.py": 60,
         "gencode/core/before_final_hooks.py": 140,
         "gencode/core/evidence_summaries.py": 90,
         "gencode/core/final_readiness.py": 120,

@@ -28,3 +28,62 @@ excluded_commands = []
 extra_readonly_paths = []
 deny_read = []
 deny_write = []
+
+# Retrieval defaults to Qwen over the OpenAI-compatible endpoint plus Qwen
+# reranking, because that is what this project runs against. Select the
+# dependency-free `hashing` embedding provider explicitly when there is no key:
+# a remote provider without a key/URL degrades to sparse-only instead of failing
+# on every request.
+[retrieval]
+enabled = true
+embedding_provider = "openai-compatible"
+embedding_model = "qwen3.7-text-embedding-flash"
+embedding_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+embedding_api_key = ""
+embedding_dimensions = 1024
+embedding_batch_size = 20
+reranker_provider = "dashscope"
+reranker_model = "qwen3.7-text-rerank"
+reranker_base_url = "https://dashscope.aliyuncs.com/api/v1"
+reranker_api_key = ""
+sparse_top_k = 50
+dense_top_k = 50
+coarse_top_k = 20
+final_top_k = 5
+rrf_k = 60
+min_score = 0.12
+code_rag_file_threshold = 1000
+
+# Child chunking. Parents stay structural (file for code, page for documents)
+# and children are cut recursively inside a parent, so a long function or a long
+# section is split on its own boundaries instead of being truncated by a
+# character cap. Overlap is a share of the child budget and is taken from the
+# tail of the previous chunk at boundary granularity.
+child_chunk_tokens = 300
+child_chunk_overlap = 0.10
+
+# Per-parent cap on the final candidate set. It stays low because sections
+# expand: matching one child returns the whole section, so a file never needs
+# several slots, and a high cap only crowds out source diversity.
+parent_max_chunks = 2
+
+# Small-to-big. Retrieval matches children because a focused fragment is easy to
+# locate, and generation receives the whole structural section it came from (the
+# function, or the heading section). Children of one section collapse into a
+# single evidence entry so the section is not repeated per matched fragment.
+section_expand = true
+# A section larger than this degrades to a line window around the matched child;
+# if no window can be built it degrades to the child text alone.
+section_max_chars = 2400
+section_window_lines = 12
+
+# Evidence scoring below this rerank score is treated as no evidence, which is
+# what makes abstention reachable at all: without a floor the pipeline can only
+# abstain when zero candidates survive, and lexical overlap almost always
+# returns something. 0 disables the floor.
+#
+# Only meaningful for a reranker whose score is monotonic in relevance and
+# calibrated to the corpus (`dashscope`, `cross-encoder`). The deterministic
+# reranker derives its score from RRF ranks, which are nearly constant across
+# queries, so the floor is reported as ignored rather than silently doing nothing.
+abstention_min_rerank = 0.0
