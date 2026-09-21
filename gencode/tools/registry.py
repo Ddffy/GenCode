@@ -11,7 +11,6 @@ from pydantic import ValidationError
 from ..core.workspace import IGNORED_PATH_NAMES
 from . import media as media_tools
 from . import repomap as repomap_tools
-from .base import RegisteredTool
 from .agents import (
     AGENT_TOOL_EXAMPLES,
     AGENT_TOOL_NAMES,
@@ -26,18 +25,12 @@ from .ask_user import (
     ASK_USER_TOOL_SPECS,
     tool_ask_user,
 )
+from .base import RegisteredTool, ToolCapability, ToolEffect
 from .plan import (
     PLAN_TOOL_EXAMPLES,
     PLAN_TOOL_SPECS,
     tool_enter_plan_mode,
     tool_exit_plan_mode,
-)
-from .todos import (
-    TODO_TOOL_EXAMPLES,
-    TODO_TOOL_SPECS,
-    tool_todo_add,
-    tool_todo_list,
-    tool_todo_update,
 )
 from .schemas import (
     AgentArgs,
@@ -45,12 +38,12 @@ from .schemas import (
     EnterPlanModeArgs,
     ExitPlanModeArgs,
     InspectImageArgs,
-    ListFilesArgs,
     KnowledgeReadArgs,
+    ListFilesArgs,
     PatchFileArgs,
     ReadFileArgs,
-    RunShellArgs,
     RepoMapArgs,
+    RunShellArgs,
     SearchArgs,
     SendMessageArgs,
     TaskStopArgs,
@@ -60,6 +53,14 @@ from .schemas import (
     WriteFileArgs,
     first_error_message,
 )
+from .todos import (
+    TODO_TOOL_EXAMPLES,
+    TODO_TOOL_SPECS,
+    tool_todo_add,
+    tool_todo_list,
+    tool_todo_update,
+)
+
 _TOOL_SCHEMAS = {
     "list_files": ListFilesArgs,
     "read_file": ReadFileArgs,
@@ -84,16 +85,19 @@ BASE_TOOL_SPECS = {
     "list_files": {
         "schema": {"path": "str='.'"},
         "risky": False,
+        "capability": ToolCapability(ToolEffect.READ, True),
         "description": "List files in the workspace.",
     },
     "read_file": {
         "schema": {"path": "str", "start": "int=1", "end": "int=200"},
         "risky": False,
+        "capability": ToolCapability(ToolEffect.READ, True),
         "description": "Read a UTF-8 file by line range.",
     },
     "search": {
         "schema": {"pattern": "str", "path": "str='.'"},
         "risky": False,
+        "capability": ToolCapability(ToolEffect.READ, True),
         "description": "Search the workspace with rg or a simple fallback.",
     },
     "run_shell": {
@@ -148,6 +152,7 @@ def build_tool_registry(agent):
             description=spec["description"],
             risky=bool(spec["risky"]),
             runner=partial(_TOOL_RUNNERS[name], agent),
+            capability=spec.get("capability", ToolCapability()),
         )
         for name, spec in BASE_TOOL_SPECS.items()
     }
@@ -155,13 +160,7 @@ def build_tool_registry(agent):
 def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
 def build_native_tool_definitions(agent):
-    """Build provider-neutral JSON Schemas for native tool calling.
-
-    The prompt-facing ``RegisteredTool.schema`` is intentionally compact and
-    human readable.  Native providers need a real JSON Schema, so derive it
-    from the same Pydantic models used by ``validate_tool`` instead of keeping
-    a second, drift-prone schema registry.
-    """
+    """Derive native JSON Schemas from the same Pydantic validation models."""
     definitions = []
     for name, tool in agent.available_tools().items():
         schema_cls = _TOOL_SCHEMAS.get(name)

@@ -1,7 +1,26 @@
 """Tool abstraction shared by the runtime and prompt builder."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
+from enum import Enum
+
+
+class ToolEffect(str, Enum):
+    """Declared side-effect class used by runtime scheduling policy."""
+
+    UNKNOWN = "unknown"
+    READ = "read"
+    WRITE = "write"
+    EXECUTE = "execute"
+    EXTERNAL = "external"
+
+
+@dataclass(frozen=True)
+class ToolCapability:
+    """Fail-closed execution properties; not exposed as model arguments."""
+
+    effect: ToolEffect = ToolEffect.UNKNOWN
+    concurrency_safe: bool = False
 
 
 @dataclass(frozen=True)
@@ -17,6 +36,7 @@ class RegisteredTool:
     description: str
     risky: bool
     runner: Callable[[dict], str]
+    capability: ToolCapability = ToolCapability()
 
     @property
     def read_only(self):

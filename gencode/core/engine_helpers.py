@@ -10,6 +10,11 @@ import time
 from ..providers.base import complete_model
 from ..providers.errors import ProviderError
 from .native_messages import build_native_messages
+from .parallel_tools import (
+    can_parallelize_tool_batch,
+    execute_parallel_safe_tools,
+)
+from .tool_execution import finalize_tool_call
 from .workspace import clip, now
 
 
@@ -58,18 +63,103 @@ def handle_prompt_checkpoints(engine, task_state, user_message, prompt_metadata)
 
 def execute_tool_payload(engine, task_state, user_message, payload):
     agent = engine.runtime
-    name = payload.get("name", "")
-    args = payload.get("args", {})
-    task_state.record_tool(name)
-    tool_started_at = time.monotonic()
-    agent.session_event_bus.emit(
-        "tool_started", {"run_id": task_state.run_id, "tool_name": name, "args": args}
-    )
-    yield {"type": "tool_call", "run_id": task_state.run_id, "name": name, "args": args}
+    tool_started_at, event = _start_tool_payload(agent, task_state, payload)
+    yield event
 
-    tool_result = agent.run_tool(name, args)
+    tool_result = agent.run_tool(event["name"], event["args"])
     tool_metadata = dict(agent._last_tool_result_metadata or {})
     tool_duration_ms = int((time.monotonic() - tool_started_at) * 1000)
+    yield from _finish_tool_payload(
+        engine, task_state, user_message, payload,
+        tool_result, tool_metadata, tool_duration_ms,
+    )
+
+
+def execute_parallel_tool_payloads(engine, task_state, user_message, payloads):
+    """Run raw safe reads concurrently and commit outcomes in source order."""
+    agent = engine.runtime
+    for payload in payloads:
+        _tool_started_at, event = _start_tool_payload(
+            agent, task_state, payload, record_state=False
+        )
+        yield event
+
+    raw_calls = execute_parallel_safe_tools(agent, payloads)
+    for payload, raw_call in zip(payloads, raw_calls):
+        task_state.record_tool(payload.get("name", ""))
+        finalize_started_at = time.monotonic()
+        outcome = finalize_tool_call(
+            agent,
+            raw_call.prepared,
+            raw_call.before_snapshot,
+            raw_call.raw,
+        )
+        finalize_ms = int((time.monotonic() - finalize_started_at) * 1000)
+        # Keep duration per call rather than charging later results for earlier
+        # results' serialized history/checkpoint work.
+        tool_duration_ms = raw_call.duration_ms + finalize_ms
+        yield from _finish_tool_payload(
+            engine, task_state, user_message, payload,
+            outcome.content, outcome.metadata, tool_duration_ms,
+        )
+
+
+def execute_tool_batch(engine, task_state, user_message, payloads, *, tool_steps):
+    """Execute a model-emitted batch and return the attempted call count."""
+    agent = engine.runtime
+    remaining_steps = max(0, agent.max_steps - tool_steps)
+    if can_parallelize_tool_batch(
+        agent, payloads, remaining_steps=remaining_steps
+    ):
+        yield from execute_parallel_tool_payloads(
+            engine, task_state, user_message, payloads
+        )
+        return len(payloads)
+
+    executed_tools = 0
+    for payload in payloads:
+        if tool_steps + executed_tools >= agent.max_steps or agent.abort_requested:
+            reason = (
+                "step_budget_exhausted"
+                if tool_steps + executed_tools >= agent.max_steps
+                else "aborted"
+            )
+            yield from record_skipped_tool_call(
+                engine, task_state, payload, reason=reason
+            )
+            continue
+        yield from execute_tool_payload(
+            engine, task_state, user_message, payload
+        )
+        executed_tools += 1
+    return executed_tools
+
+
+def _start_tool_payload(agent, task_state, payload, *, record_state=True):
+    name = payload.get("name", "")
+    args = payload.get("args", {})
+    if record_state:
+        task_state.record_tool(name)
+    tool_started_at = time.monotonic()
+    agent.session_event_bus.emit(
+        "tool_started",
+        {"run_id": task_state.run_id, "tool_name": name, "args": args},
+    )
+    return tool_started_at, {
+        "type": "tool_call",
+        "run_id": task_state.run_id,
+        "name": name,
+        "args": args,
+    }
+
+
+def _finish_tool_payload(
+    engine, task_state, user_message, payload,
+    tool_result, tool_metadata, tool_duration_ms,
+):
+    agent = engine.runtime
+    name = payload.get("name", "")
+    args = payload.get("args", {})
     agent.session_event_bus.emit(
         "tool_finished",
         {
