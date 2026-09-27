@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from gencode.config import resolve_project_retrieval_config
 from gencode.evaluation.retrieval_eval import run_retrieval_evaluation
 from gencode.features.repomap.tags import FileTags
@@ -19,6 +21,7 @@ from gencode.features.retrieval.chunking import (
     pack_pieces,
     split_recursive,
 )
+from gencode.features.retrieval.index import SQLiteRetrievalIndex
 from gencode.features.retrieval.plugins import RetrieverRegistry
 from gencode.features.retrieval.rerank import DashScopeReranker, resolve_conflicts
 from gencode.features.retrieval.router import RetrievalRouter
@@ -328,6 +331,66 @@ def test_hybrid_service_indexes_sparse_and_dense_then_returns_citations(tmp_path
     citation_map = response.metrics["citations"]
     assert validate_citations("Use the retry rule [E1].", citation_map)["valid"]
     assert not validate_citations("Invented [E99].", citation_map)["valid"]
+
+
+def test_hnsw_dense_search_respects_scope_and_rebuilds_after_sync(tmp_path, monkeypatch):
+    pytest.importorskip("hnswlib")
+
+    class FixedEmbedder:
+        model_id = "fixed-embedding"
+
+        def embed_documents(self, texts):
+            return [
+                [1.0, 0.0, 0.0] if "alpha" in text else [0.0, 1.0, 0.0]
+                for text in texts
+            ]
+
+    def chunk(chunk_id, workspace, text, source_type="wiki"):
+        return RetrievalChunk(
+            chunk_id=chunk_id, parent_id=chunk_id, source_id=chunk_id,
+            source_type=source_type, title=chunk_id, text=text,
+            workspace_id=workspace, source_hash=text,
+        )
+
+    path = tmp_path / "index.db"
+    index = SQLiteRetrievalIndex(path)
+    embedder = FixedEmbedder()
+    index.sync([chunk("local", "w1", "alpha")], namespace="wiki",
+               workspace_id="w1", embedder=embedder)
+    index.sync([chunk("foreign", "w2", "alpha")], namespace="wiki",
+               workspace_id="w2", embedder=embedder)
+    index.sync([chunk("code", "w1", "alpha", "code")], namespace="code",
+               workspace_id="w1", embedder=embedder)
+    monkeypatch.setattr(index, "_dense_search_exact", lambda *args, **kwargs: pytest.fail("exact scan used"))
+
+    hits = index.dense_search([1.0, 0.0, 0.0], model_id=embedder.model_id,
+                              top_k=5, workspace_id="w1", source_types=("wiki",))
+    assert [hit.chunk.chunk_id for hit in hits] == ["local"]
+    assert index.stats()["dense_backend"] == "hnsw"
+    code_hits = index.dense_search([1.0, 0.0, 0.0], model_id=embedder.model_id,
+                                   top_k=5, workspace_id="w1", source_types=("code",))
+    assert [hit.chunk.chunk_id for hit in code_hits] == ["code"]
+
+    index.sync([chunk("replacement", "w1", "beta")], namespace="wiki",
+               workspace_id="w1", embedder=embedder)
+    hits = index.dense_search([0.0, 1.0, 0.0], model_id=embedder.model_id,
+                              top_k=5, workspace_id="w1", source_types=("wiki",))
+    assert [hit.chunk.chunk_id for hit in hits] == ["replacement"]
+
+    reopened = SQLiteRetrievalIndex(path)
+    hits = reopened.dense_search([0.0, 1.0, 0.0], model_id=embedder.model_id,
+                                 top_k=5, workspace_id="w1", source_types=("wiki",))
+    assert [hit.chunk.chunk_id for hit in hits] == ["replacement"]
+    assert reopened.stats()["dense_backend"] == "hnsw"
+
+    def broken_graph(*_args):
+        raise RuntimeError("graph unavailable")
+
+    monkeypatch.setattr(reopened, "_hnsw_index", broken_graph)
+    fallback = reopened.dense_search([0.0, 1.0, 0.0], model_id=embedder.model_id,
+                                     top_k=5, workspace_id="w1", source_types=("wiki",))
+    assert [hit.chunk.chunk_id for hit in fallback] == ["replacement"]
+    assert reopened.stats()["dense_backend"] == "exact"
 
 
 def test_candidate_preparation_caps_twenty_before_final_rerank(tmp_path):

@@ -11,17 +11,25 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+try:
+    import hnswlib
+except ImportError:  # The exact search remains available without the optional ANN package.
+    hnswlib = None
+
 from .query import search_tokens
 from .types import RetrievalChunk, RetrievalHit
 
 
 class SQLiteRetrievalIndex:
-    """Rebuildable FTS5 + packed-vector index with deterministic fallback."""
+    """Rebuildable FTS5 + packed vectors with an HNSW search index."""
 
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._hnsw_cache = {}
+        self._hnsw_error = ""
+        self._last_dense_backend = "not_queried"
         self.fts_enabled = True
         self._ensure_schema()
 
@@ -66,6 +74,13 @@ class SQLiteRetrievalIndex:
                 signature TEXT NOT NULL, model_id TEXT NOT NULL,
                 chunk_count INTEGER NOT NULL,
                 PRIMARY KEY(namespace, workspace_id))"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS retrieval_index_generation (
+                id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL)"""
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO retrieval_index_generation VALUES (1, 0)"
             )
             # Structural sections (a function, a heading section) exist so a
             # matched child can be expanded to the whole section before it is
@@ -200,6 +215,19 @@ class SQLiteRetrievalIndex:
                         ),
                     ),
                 )
+            connection.execute(
+                "UPDATE retrieval_index_generation SET generation = generation + 1 WHERE id = 1"
+            )
+        with self._lock:
+            self._hnsw_cache.clear()
+            if hnswlib is not None and vectors:
+                # SQLite remains the source of truth; the graph is rebuilt after
+                # a changed sync and once after a process restart.
+                try:
+                    self._hnsw_index(model_id, len(next(iter(vectors.values()))))
+                    self._hnsw_error = ""
+                except Exception as exc:  # noqa: BLE001 - derived index failure is recoverable
+                    self._hnsw_error = str(exc)
         return {
             "changed": True,
             "chunks": len(rows),
@@ -275,15 +303,113 @@ class SQLiteRetrievalIndex:
         workspace_id,
         source_types=(),
     ):
+        if hnswlib is not None and len(vector) > 0 and top_k > 0:
+            try:
+                result = self._dense_search_hnsw(
+                    vector, model_id=model_id, top_k=top_k,
+                    workspace_id=workspace_id, source_types=source_types,
+                )
+                self._last_dense_backend = "hnsw"
+                self._hnsw_error = ""
+                return result
+            except Exception as exc:  # noqa: BLE001 - exact search is the fallback
+                # An invalid or unavailable derived graph must not lose results.
+                self._hnsw_error = str(exc)
+        self._last_dense_backend = "exact"
+        return self._dense_search_exact(
+            vector, model_id=model_id, top_k=top_k,
+            workspace_id=workspace_id, source_types=source_types,
+        )
+
+    def _dense_search_hnsw(self, vector, *, model_id, top_k, workspace_id, source_types):
+        with self._lock:
+            graph, chunks = self._hnsw_index(model_id, len(vector))
+            if graph is None:
+                return []
+            wanted_types = set(source_types)
+            allowed = {
+                label for label, (chunk_id, source_type, owner, scope) in enumerate(chunks)
+                if (not wanted_types or source_type in wanted_types)
+                and (scope == "global" or owner == str(workspace_id))
+            }
+            if not allowed:
+                return []
+            graph.set_ef(max(100, int(top_k) * 2))
+            labels, distances = graph.knn_query(
+                [vector], k=min(int(top_k), len(allowed)), num_threads=1,
+                filter=allowed.__contains__,
+            )
+            matches = [
+                (chunks[int(label)][0], 1.0 - float(distance))
+                for label, distance in zip(labels[0], distances[0])
+                if 1.0 - float(distance) > 0
+            ]
+            if not matches:
+                return []
+            placeholders = ",".join("?" for _ in matches)
+            type_sql, type_params = _source_type_sql(source_types)
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"SELECT chunk_id, chunk_json FROM retrieval_chunks "
+                    f"WHERE chunk_id IN ({placeholders}) AND status='active' "
+                    "AND sensitivity='normal' AND injection_flag=0 "
+                    f"AND (scope='global' OR workspace_id=?) {type_sql}",
+                    [*[chunk_id for chunk_id, _ in matches], str(workspace_id), *type_params],
+                ).fetchall()
+        payloads = dict(rows)
+        return [
+            RetrievalHit(
+                chunk=RetrievalChunk.from_dict(json.loads(payloads[chunk_id])),
+                dense_score=score, channels=["dense"],
+            )
+            for chunk_id, score in matches if chunk_id in payloads
+        ]
+
+    def _hnsw_index(self, model_id, dimensions):
+        key = (str(model_id), int(dimensions))
+        with self._lock:
+            with self._connect() as connection:
+                connection.execute("BEGIN")  # generation and vectors share one snapshot
+                generation = connection.execute(
+                    "SELECT generation FROM retrieval_index_generation WHERE id = 1"
+                ).fetchone()[0]
+                cached = self._hnsw_cache.get(key)
+                if cached is not None and cached[0] == generation:
+                    return cached[1], cached[2]
+                rows = connection.execute(
+                    """SELECT v.chunk_id, v.vector, c.source_type, c.workspace_id, c.scope
+                    FROM retrieval_vectors v JOIN retrieval_chunks c USING(chunk_id)
+                    WHERE v.model_id=? AND v.dimensions=? AND c.status='active'
+                      AND c.sensitivity='normal' AND c.injection_flag=0
+                    ORDER BY v.chunk_id""",
+                    key,
+                ).fetchall()
+            if not rows:
+                self._hnsw_cache[key] = (generation, None, [])
+                return None, []
+            graph = hnswlib.Index(space="cosine", dim=int(dimensions))
+            graph.init_index(max_elements=len(rows), M=16, ef_construction=200)
+            graph.add_items(
+                [_unpack_vector(blob, dimensions) for _, blob, *_ in rows],
+                list(range(len(rows))),
+            )
+            chunks = [(chunk_id, source_type, owner, scope)
+                      for chunk_id, _, source_type, owner, scope in rows]
+            self._hnsw_cache[key] = (generation, graph, chunks)
+            return graph, chunks
+
+    def _dense_search_exact(
+        self, vector, *, model_id, top_k, workspace_id, source_types=(),
+    ):
         type_sql, params = _source_type_sql(source_types, prefix="c.")
         sql = f"""SELECT c.chunk_json, v.dimensions, v.vector
             FROM retrieval_vectors v JOIN retrieval_chunks c USING(chunk_id)
-            WHERE v.model_id=? AND c.status='active'
+            WHERE v.model_id=? AND v.dimensions=? AND c.status='active'
               AND c.sensitivity='normal' AND c.injection_flag=0
               AND (c.scope='global' OR c.workspace_id=?) {type_sql}"""
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                sql, [str(model_id), str(workspace_id), *params]
+                sql, [str(model_id), len(vector), str(workspace_id), *params]
             ).fetchall()
         ranked = []
         query_vector = _normalize(vector)
@@ -313,6 +439,8 @@ class SQLiteRetrievalIndex:
             "chunks": int(chunks),
             "vectors": int(vectors),
             "fts_enabled": bool(self.fts_enabled),
+            "dense_backend": self._last_dense_backend,
+            "hnsw_error": self._hnsw_error,
             "manifests": [
                 {
                     "namespace": row[0],
