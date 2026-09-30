@@ -47,7 +47,7 @@ def test_retrieval_trace_event_records_selected_and_rejected_without_prompt_leak
     assert "alpha note 0" not in agent.model_client.prompts[-1]
 
 
-def test_memory_file_read_trace_event_records_memory_paths(tmp_path):
+def test_legacy_memory_files_are_not_read_or_traced(tmp_path):
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
     topic_dir = tmp_path / ".gencode" / "memory" / "topics"
     topic_dir.mkdir(parents=True, exist_ok=True)
@@ -61,8 +61,6 @@ def test_memory_file_read_trace_event_records_memory_paths(tmp_path):
 
     trace_events = read_jsonl(agent.current_run_dir / "trace.jsonl")
     file_reads = [event for event in trace_events if event["event"] == "memory.file_read"]
-    assert {event["reason"] for event in file_reads} == {"retrieval"}
-    assert {event["path"] for event in file_reads} >= {
-        ".gencode/memory/MEMORY.md",
-        ".gencode/memory/topics/test-topic.md",
-    }
+    assert file_reads == []
+    assert "alpha durable note" not in agent.model_client.prompts[-1]
+    assert (topic_dir / "test-topic.md").read_text(encoding="utf-8").endswith("- alpha durable note\n")

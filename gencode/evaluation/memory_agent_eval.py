@@ -229,12 +229,11 @@ def _stale_evidence_case():
         anchor.write_text("old\n", encoding="utf-8")
         fact = "Anchor fact uses alpha."
         memory = LayeredMemory(workspace_root=workspace_root)
-        memory.promote_durable([("project-conventions", fact)])
-        metadata_path = workspace_root / ".gencode" / "memory" / "topics" / "project-conventions.metadata.jsonl"
-        metadata_rows = [json.loads(line) for line in metadata_path.read_text(encoding="utf-8").splitlines()]
-        metadata_rows[0]["evidence"]["source_path"] = "anchor.txt"
-        metadata_rows[0]["evidence"]["evidence_anchor_hash"] = compute_anchor_hash(anchor)
-        metadata_path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in metadata_rows), encoding="utf-8")
+        memory.append_note(fact, tags=("anchor",), source="anchor.txt")
+        memory.state["episodic_notes"][0]["evidence"] = {
+            "source_path": "anchor.txt",
+            "evidence_anchor_hash": compute_anchor_hash(anchor),
+        }
         anchor.write_text("new\n", encoding="utf-8")
         structured = memory.retrieval_view_structured("anchor", limit=3)
     row = _contract_row(
@@ -1250,7 +1249,7 @@ def render_memory_evaluation_report(artifact):
     unsafe = challenge["variants"]["unsafe_memory"]["summary"]
     reads_delta = artifact["summary"]["repeated_context_reads_delta"]
     lines = [
-        "# GenCode 长期记忆系统与 Challenge Benchmark 报告",
+        "# GenCode 会话记忆与 Challenge Benchmark 报告",
         "",
         "## Resume Claim",
         "",
@@ -1258,10 +1257,10 @@ def render_memory_evaluation_report(artifact):
         "",
         "## What Was Built",
         "",
-        "- 文件优先 durable memory：长期事实落在 `.gencode/memory/topics/*.md`，主存储保持可读、可 diff、可审计。",
-        "- sidecar metadata：每条 note 记录 `note_id`、`status`、`supersedes`、`evidence`、`scope`，用于解释 selected/rejected。",
-        "- 结构化检索：`retrieval_view_structured` 返回 selected 与 rejected，rejected 带 `reject_reason`，但不进入 prompt。",
-        "- 记忆更新/遗忘：通过 `superseded`、`quarantined`、`stale_evidence`、`scope_mismatch` 控制旧事实、污染记忆和过期证据。",
+        "- 该 challenge 对当前 Session 内的 Working Memory 做 provider-free 行为评测，不代表 Skill/Wiki/Spec 的长期召回能力。",
+        "- 跨 Session 的长期知识只由 `.gencode/knowledge/` 中的 Skill/Wiki/Spec 承载；本报告不评测其自动提取或审批流程。",
+        "- 结构化检索：`retrieval_view_structured` 返回 selected 与 rejected，rejected 带 `reject_reason`，但不进入当前 Prompt。",
+        "- 会话笔记过滤：通过 `superseded`、`quarantined`、`stale_evidence`、`scope_mismatch` 模拟更新、隔离和过期证据。",
         "- 跨会话恢复：复用 recovery artifact 的 resume、workspace drift、false-resume、first action 和 todo continuity 指标。",
         "",
         "## Contract Verification",

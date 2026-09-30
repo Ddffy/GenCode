@@ -252,7 +252,7 @@ def test_context_manager_summarizes_older_tool_output_into_one_line(tmp_path):
     assert metadata["history"]["reused_file_summary_count"] == 0
 
 
-def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
+def test_context_manager_does_not_read_legacy_topic_memory(tmp_path):
     memory_root = tmp_path / ".gencode" / "memory"
     topics_dir = memory_root / "topics"
     topics_dir.mkdir(parents=True)
@@ -279,8 +279,5 @@ def test_context_manager_relevant_memory_can_mix_durable_notes(tmp_path):
     prompt, metadata = ContextManager(agent).build("What conventions should I follow?")
     relevant_section = prompt.split("Relevant memory:\n", 1)[1].split("\n\nTranscript:", 1)[0]
 
-    assert "Use constrained tools instead of guessing." in relevant_section
-    assert any("Use constrained tools instead of guessing." in item for item in metadata["relevant_memory"]["selected_notes"])
-    assert metadata["relevant_memory"]["selected_durable_count"] == 1
-    assert metadata["relevant_memory"]["selected_sources"] == ["project-conventions"]
-    assert metadata["relevant_memory"]["selected_kinds"] == ["durable"]
+    assert "Use constrained tools instead of guessing." not in relevant_section
+    assert metadata["relevant_memory"]["selected_notes"] == []

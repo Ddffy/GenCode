@@ -975,20 +975,21 @@ hello $ARGUMENTS from prompt only
         ]
         return self.result("S42", "/clear 停掉后台 worker", "one-shot + REPL clear", workspace, [first, second], checks)
 
-    def s43_remember_daily_log(self) -> ScenarioResult:
+    def s43_remember_candidate(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s43")
         command = self.run_gencode("S43", workspace, repl_input="/remember 这个项目用 pytest，不用 unittest\n/exit\n", timeout=120)
-        logs = list((workspace / ".gencode" / "memory" / "logs").rglob("*.md"))
-        text = "\n".join(path.read_text(encoding="utf-8") for path in logs)
+        records = list((workspace / ".gencode" / "knowledge").glob("**/*.md"))
+        text = "\n".join(path.read_text(encoding="utf-8") for path in records)
         checks = [
             check("command_exit_0", command.returncode == 0),
-            check("daily_log_created", bool(logs), [str(path) for path in logs]),
-            check("daily_log_contains_note", "pytest" in text and "unittest" in text),
+            check("knowledge_candidate_created", bool(records), [str(path) for path in records]),
+            check("candidate_contains_note", "pytest" in text and "unittest" in text),
+            check("candidate_not_auto_activated", 'status: "candidate"' in text),
         ]
-        checks.extend(self.events_have(workspace, "memory_note_appended"))
-        return self.result("S43", "/remember 写 daily log", "PTY-style stdin REPL", workspace, [command], checks)
+        checks.extend(self.events_have(workspace, "knowledge_candidate_proposed"))
+        return self.result("S43", "/remember 创建类型化候选", "PTY-style stdin REPL", workspace, [command], checks)
 
-    def s44_dream_writes_memory(self) -> ScenarioResult:
+    def s44_dream_proposes_typed_knowledge(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s44")
         repl = (
             "/remember Project convention: use pytest for tests\n"
@@ -998,32 +999,31 @@ hello $ARGUMENTS from prompt only
             "/exit\n"
         )
         command = self.run_gencode("S44", workspace, repl_input=repl, max_steps=5, max_new_tokens=2048, timeout=420)
-        memory_root = workspace / ".gencode" / "memory"
-        memory_text = "\n".join(path.read_text(encoding="utf-8") for path in memory_root.rglob("*.md")) if memory_root.exists() else ""
+        knowledge_root = workspace / ".gencode" / "knowledge"
+        knowledge_text = "\n".join(path.read_text(encoding="utf-8") for path in knowledge_root.rglob("*.md")) if knowledge_root.exists() else ""
         checks = [
             check("command_exit_0", command.returncode == 0),
-            check("memory_written", "pytest" in memory_text or "artifacts" in memory_text, memory_text[:300]),
+            check("typed_knowledge_candidate_written", "pytest" in knowledge_text or "artifacts" in knowledge_text, knowledge_text[:300]),
+            check("candidate_not_auto_activated", 'status: "candidate"' in knowledge_text),
+            check("legacy_memory_not_recreated", not (workspace / ".gencode" / "memory").exists()),
             check("no_memory_escape", not (workspace.parent / "MEMORY.md").exists()),
         ]
-        return self.result("S44", "/dream 写 topic 和 MEMORY.md", "PTY REPL / DeepSeek", workspace, [command], checks)
+        return self.result("S44", "/dream 提炼类型化候选", "PTY REPL / DeepSeek", workspace, [command], checks)
 
     def s45_secret_memory_rejected(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s45")
-        prompt = (
-            "请记住这些稳定事实到 durable memory，并把下面事实作为最终回答返回，不要调用工具："
-            "<final>Dependency: API key is sk-live-secret-abc.\n"
-            "Project convention: Use pytest for tests.</final>"
-        )
+        prompt = "请创建一个Wiki候选，正文原样包含这个测试凭证 `sk-AAAAAAAAAAAAAAAAAAAA`。"
         command = self.run_gencode("S45", workspace, prompt=prompt, max_steps=2, max_new_tokens=1024, timeout=240)
-        memory_root = workspace / ".gencode" / "memory"
-        memory_text = "\n".join(path.read_text(encoding="utf-8") for path in memory_root.rglob("*.md")) if memory_root.exists() else ""
         report = self.evidence(workspace).report
+        knowledge_root = workspace / ".gencode" / "knowledge"
+        knowledge_text = "\n".join(path.read_text(encoding="utf-8") for path in knowledge_root.rglob("*.md")) if knowledge_root.exists() else ""
+        quarantined = report.get("knowledge_maintenance", {}).get("quarantined", [])
         checks = [
             check("command_exit_0", command.returncode == 0),
-            check("secret_not_promoted", "sk-live-secret-abc" not in memory_text),
-            check("durable_rejection_recorded", any("secret_shaped" in item for item in report.get("durable_rejections", [])), report.get("durable_rejections")),
+            check("secret_not_persisted", "sk-AAAAAAAAAAAAAAAAAAAA" not in knowledge_text),
+            check("quarantine_recorded", any("secret_shaped" in item.get("quality_reasons", []) for item in quarantined), quarantined),
         ]
-        return self.result("S45", "secret-shaped 记忆拒绝", "one-shot CLI / DeepSeek", workspace, [command], checks)
+        return self.result("S45", "secret-shaped 知识候选隔离", "one-shot CLI / DeepSeek", workspace, [command], checks)
 
     def s46_manual_compact(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s46")

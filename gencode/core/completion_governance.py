@@ -151,8 +151,7 @@ def _emit_terminal_artifacts(
         stop_reason=task_state.stop_reason,
     )
     if maintain_memory:
-        agent.promote_durable_memory(user_message, final)
-        maintain_memory_safely(agent, task_state, final)
+        maintain_knowledge_safely(agent, task_state, final)
     checkpoint = agent.create_checkpoint(
         task_state, user_message, trigger=checkpoint_trigger
     )
@@ -202,20 +201,8 @@ def _emit_terminal_artifacts(
 
 
 def maintain_memory_safely(agent, task_state, final_answer):
-    try:
-        agent.maintain_memory_after_turn(final_answer)
-    except Exception as exc:
-        audit = getattr(agent, "last_memory_maintenance", {"errors": []})
-        errors = audit.setdefault("errors", [])
-        errors.append(str(exc))
-        agent.last_memory_maintenance = audit
-        agent.session_event_bus.emit(
-            "memory_maintenance_failed",
-            {"run_id": task_state.run_id, "error": clip(str(exc), 300)},
-        )
-        agent.emit_trace(
-            task_state, "memory_maintenance_failed", {"error": clip(str(exc), 300)}
-        )
+    # Compatibility wrapper for older imports. There is no separate durable
+    # memory maintenance path; typed knowledge/Dream is the sole long-term path.
     maintain_knowledge_safely(agent, task_state, final_answer)
 
 

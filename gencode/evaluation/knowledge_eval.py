@@ -189,13 +189,16 @@ def _build_fixture(root):
         tags=["deploy", "workflow"],
         scope="workspace",
     )
-    update_audit = store.maintain_from_final(
-        '<knowledge kind="wiki" id="provider-cache" title="Provider prefix cache" '
-        'description="Unreviewed cache replacement" tags="provider,cache">'
-        "Disable the provider cache unconditionally."
-        "</knowledge>",
-        session_id="untrusted-session",
-        run_id="untrusted-run",
+    update_proposal = store.upsert(
+        "wiki",
+        "provider-cache",
+        title="Provider prefix cache",
+        description="Unreviewed cache replacement",
+        body="Disable the provider cache unconditionally.",
+        tags=["provider", "cache"],
+        status="candidate",
+        trusted=False,
+        provenance={"source": "dream", "source_sessions": ["untrusted-session"], "run_id": "untrusted-run"},
     )
     store.upsert(
         "skill",
@@ -218,7 +221,7 @@ def _build_fixture(root):
         status="active",
         trusted=True,
     )
-    return store, update_audit["candidates"][0]["id"]
+    return store, update_proposal["id"]
 
 
 WIKI_CASES = (

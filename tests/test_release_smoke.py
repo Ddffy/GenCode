@@ -4,13 +4,12 @@ This module verifies the two end-to-end user journeys that must work before
 public release:
 
 1. **basic edit flow** — read a file, propose a patch, apply it
-2. **dream consolidation** — auto-dream produces non-empty topic files
+2. **dream extraction** — Dream produces inactive Skill/Wiki/Spec candidates
 
 These tests use ScriptedModelClient (deterministic) by default so CI always runs.
 Set GENCODE_LIVE_SMOKE=1 with a provider configured to run them against a real model.
 """
 import os
-import textwrap
 
 import pytest
 
@@ -126,8 +125,8 @@ def _has_live_provider():
     not _has_live_provider(),
     reason="set GENCODE_LIVE_SMOKE=1 and a provider API key to run against a real model",
 )
-def test_dream_produces_non_empty_topics_with_live_provider(tmp_path):
-    """End-to-end: 真实 provider 跑一次 dream，topics/ 必须产出非空文件。"""
+def test_dream_produces_typed_candidates_with_live_provider(tmp_path):
+    """End-to-end: 真实 provider 跑一次 Dream，候选必须保持未激活状态。"""
     from gencode.config import resolve_provider_config
     from gencode.providers import (
         AnthropicCompatibleModelClient,
@@ -149,21 +148,6 @@ def test_dream_produces_non_empty_topics_with_live_provider(tmp_path):
         timeout=180,
     )
 
-    log_path = tmp_path / ".gencode" / "memory" / "logs" / "2026" / "05" / "2026-05-13.md"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(
-        textwrap.dedent(
-            """\
-            # 2026-05-13 daily log
-
-            - 测试项目使用 pytest 而非 unittest
-            - 部署前必须运行 `make test` 和 `make lint`
-            - 切勿提交真实的 API key
-            """
-        ),
-        encoding="utf-8",
-    )
-
     agent = GenCode(
         model_client=model,
         workspace=workspace,
@@ -171,12 +155,19 @@ def test_dream_produces_non_empty_topics_with_live_provider(tmp_path):
         approval_policy="auto",
         auto_dream=False,
     )
+    agent.session["history"].extend(
+        [
+            {"role": "user", "content": "记住：本项目发布前必须运行 pytest。"},
+            {"role": "assistant", "content": "已记录这个稳定的项目约定。"},
+        ]
+    )
+    store.save(agent.session)
 
-    agent.run_dream()
+    agent.run_dream(session_ids=[agent.session["id"]])
 
-    topics_dir = tmp_path / ".gencode" / "memory" / "topics"
-    written = [p for p in topics_dir.glob("*.md") if p.read_text(encoding="utf-8").strip()]
-    assert written, "dream 必须至少产出一个非空 topic 文件"
-
-    index = (tmp_path / ".gencode" / "memory" / "MEMORY.md").read_text(encoding="utf-8")
-    assert "topics/" in index
+    candidates = [
+        row for row in agent.knowledge_store.list_records(include_inactive=True)
+        if row.get("status") == "candidate"
+    ]
+    assert candidates, "Dream 应该产出 typed-knowledge candidate，而不是直接激活"
+    assert not (tmp_path / ".gencode" / "memory").exists()

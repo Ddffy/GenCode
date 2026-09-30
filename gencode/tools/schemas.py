@@ -8,9 +8,9 @@ live in validate_tool() since they require access to the agent.
 
 from __future__ import annotations
 
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class ListFilesArgs(BaseModel):
@@ -77,6 +77,47 @@ class KnowledgeReadArgs(BaseModel):
             raise ValueError("max_chars must be in [1, 24000]")
         return v
 
+
+class KnowledgeProposeArgs(BaseModel):
+    """Create a typed-knowledge candidate; activation always requires approval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["skill", "wiki", "spec"]
+    id: str = ""
+    title: str
+    description: str = ""
+    summary: str = ""
+    body: str
+    tags: List[str] = Field(default_factory=list)
+    source_paths: List[str] = Field(default_factory=list)
+    source_sessions: List[str] = Field(default_factory=list)
+    when_to_use: str = ""
+    paths: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list)
+    constraints: List[str] = Field(default_factory=list)
+    invariants: List[str] = Field(default_factory=list)
+    acceptance: List[str] = Field(default_factory=list)
+
+    @field_validator("title", "body")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator(
+        "tags", "source_paths", "source_sessions", "paths", "allowed_tools",
+        "constraints", "invariants", "acceptance",
+    )
+    @classmethod
+    def bounded_string_lists(cls, values: List[str]) -> List[str]:
+        if len(values) > 50:
+            raise ValueError("list may contain at most 50 items")
+        normalized = [str(item).strip() for item in values]
+        if any(not item for item in normalized):
+            raise ValueError("list items must not be empty")
+        return normalized
 
 class InspectImageArgs(BaseModel):
     path: str

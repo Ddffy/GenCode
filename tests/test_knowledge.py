@@ -3,7 +3,7 @@ import pytest
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.cli import handle_repl_command
 from gencode.features import skills as skillslib
-from gencode.features.knowledge import KnowledgeStore, extract_knowledge_candidates
+from gencode.features.knowledge import KnowledgeStore
 from gencode.testing import ScriptedModelClient
 
 
@@ -126,16 +126,19 @@ def test_untrusted_update_cannot_overwrite_active_record_and_approval_versions_i
         tags=["retry"],
     )
 
-    audit = store.maintain_from_final(
-        '<knowledge kind="wiki" id="retry-contract" title="Retry contract" '
-        'description="Provider retry behavior" tags="retry">'
-        "Retry every failure ninety-nine times."
-        "</knowledge>",
-        session_id="session-1",
-        run_id="run-1",
+    proposal = store.upsert(
+        "wiki",
+        "retry-contract",
+        title="Retry contract",
+        description="Provider retry behavior",
+        body="Retry every failure ninety-nine times.",
+        tags=["retry"],
+        status="candidate",
+        trusted=False,
+        provenance={"source": "dream", "source_sessions": ["session-1"], "run_id": "run-1"},
     )
 
-    proposal_id = audit["candidates"][0]["id"]
+    proposal_id = proposal["id"]
     assert proposal_id.startswith("retry-contract-proposal-")
     assert (
         store.get("retry-contract", kind="wiki")["body"]
@@ -352,21 +355,21 @@ def test_context_assembles_bound_spec_selected_skill_and_wiki(tmp_path):
     assert metadata["knowledge"]["selected_wiki_ids"] == ["rollback-fact"]
 
 
-def test_model_final_creates_candidate_with_provenance_not_active_memory(tmp_path):
-    final = (
-        '<knowledge kind="wiki" id="context-rule" title="Context rule" '
-        'description="Context pressure rule" tags="context,budget">'
-        "Pressure tier two starts at eighty percent."
-        "</knowledge>"
+def test_structured_proposal_tool_creates_candidate_with_provenance(tmp_path):
+    agent = _agent(
+        tmp_path,
+        [
+            '<tool>{"name":"knowledge_propose","args":{"kind":"wiki","id":"context-rule","title":"Context rule","description":"Context pressure rule","tags":["context","budget"],"body":"Pressure tier two starts at eighty percent."}}</tool>',
+            "<final>Candidate recorded.</final>",
+        ],
     )
-    agent = _agent(tmp_path, [f"<final>{final}</final>"])
 
-    assert agent.ask("record the stable context rule") == final
+    assert agent.ask("record the stable context rule") == "Candidate recorded."
     record = agent.knowledge_store.get(
         "context-rule", kind="wiki", include_inactive=True
     )
     assert record["status"] == "candidate"
-    assert record["provenance"]["source"] == "model_final"
+    assert record["provenance"]["source"] == "assistant_tool"
     assert record["provenance"]["run_id"]
     assert not agent.knowledge_store.retrieve("context pressure", skill_limit=0)["wiki"]
 
@@ -401,25 +404,15 @@ def test_cli_approval_skill_discovery_and_spec_binding(tmp_path):
     assert agent.active_spec_ids() == ["audit-contract"]
 
 
-def test_extractor_requires_explicit_typed_tags():
-    rows = extract_knowledge_candidates(
-        'text <knowledge kind="skill" id="test-flow" title="Test flow" '
-        'description="Run tests" tags="test" allowed_tools="run_shell">Do it.</knowledge>'
+def test_final_answer_markup_is_not_a_knowledge_ingestion_channel(tmp_path):
+    agent = _agent(
+        tmp_path,
+        ['<final><knowledge kind="wiki" id="hidden" title="Hidden" description="No tags">not persisted</knowledge></final>'],
     )
-    assert rows == [
-        {
-            "kind": "skill",
-            "id": "test-flow",
-            "title": "Test flow",
-            "description": "Run tests",
-            "body": "Do it.",
-            "tags": ["test"],
-            "source_paths": [],
-            "when_to_use": "",
-            "paths": [],
-            "allowed_tools": ["run_shell"],
-        }
-    ]
+
+    assert agent.ask("Answer normally")
+    assert agent.knowledge_store.get("hidden", kind="wiki", include_inactive=True) is None
+    assert "knowledge_propose" in agent.available_tools()
 
 
 def test_wiki_summary_section_excerpt_and_on_demand_read(tmp_path):

@@ -124,24 +124,24 @@
       }
     },
     {
-      "id": "durable_promotion_accept",
-      "prompt": "Capture the stable benchmark facts as durable memory and respond with only the promoted facts.",
+      "id": "knowledge_candidate_accept",
+      "prompt": "Propose the stable benchmark artifact location as a Wiki candidate for review.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
-      "allowed_tools": ["read_file"],
+      "allowed_tools": ["knowledge_propose"],
       "step_budget": 2,
-      "expected_artifact": "README.md fixture stays available while durable promotion succeeds",
-      "verifier": "python3 -c \"import json; from pathlib import Path; report = json.loads(next(Path('.gencode/runs').glob('*/report.json')).read_text(encoding='utf-8')); conventions = Path('.gencode/memory/topics/project-conventions.md').read_text(encoding='utf-8'); assert len(report['durable_promotions']) == 2; assert 'Preserve benchmark regression artifacts under artifacts/.' in conventions\"",
-      "category": "durable-contract"
+      "expected_artifact": "README.md fixture stays available while a Wiki candidate is created",
+      "verifier": "python3 -c \"import json; from pathlib import Path; report = json.loads(next(Path('.gencode/runs').glob('*/report.json')).read_text(encoding='utf-8')); record = Path('.gencode/knowledge/wiki/benchmark-artifacts.md').read_text(encoding='utf-8'); candidates = report['knowledge_maintenance']['candidates']; assert 'status: \\\"candidate\\\"' in record; assert any(row['id'] == 'benchmark-artifacts' and row['status'] == 'candidate' for row in candidates)\"",
+      "category": "typed-knowledge-contract"
     },
     {
-      "id": "durable_promotion_reject",
-      "prompt": "Capture only the stable benchmark facts into durable memory and reject anything transient or secret-shaped.",
+      "id": "knowledge_candidate_quarantine",
+      "prompt": "Review this secret-shaped Wiki proposal and ensure it is quarantined, not activated.",
       "fixture_repo": "tests/fixtures/bench_repo_readme",
-      "allowed_tools": ["read_file"],
+      "allowed_tools": ["knowledge_propose"],
       "step_budget": 2,
-      "expected_artifact": "README.md fixture stays available while durable rejection is recorded",
-      "verifier": "python3 -c \"import json; from pathlib import Path; report = json.loads(next(Path('.gencode/runs').glob('*/report.json')).read_text(encoding='utf-8')); assert report['durable_rejections'] == ['dependency-facts:secret_shaped', 'key-decisions:transient_task_state']; assert report['durable_promotions'] == ['project-conventions: Keep verifier outcomes stable across reruns.']\"",
-      "category": "durable-contract"
+      "expected_artifact": "README.md fixture stays available while the secret-shaped proposal is quarantined",
+      "verifier": "python3 -c \"import json; from pathlib import Path; report = json.loads(next(Path('.gencode/runs').glob('*/report.json')).read_text(encoding='utf-8')); record = Path('.gencode/knowledge/wiki/secret-bearing-note.md').read_text(encoding='utf-8'); rejected = report['knowledge_maintenance']['quarantined']; assert 'status: \\\"quarantined\\\"' in record; assert 'sk-AAAAAAAAAAAAAAAAAAAA' not in record; assert any(row['id'] == 'secret-bearing-note' and 'secret_shaped' in row['quality_reasons'] for row in rejected)\"",
+      "category": "typed-knowledge-contract"
     }
   ]
 }

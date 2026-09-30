@@ -103,11 +103,13 @@ SCRIPTED_MODEL_OUTPUTS = {
     "workspace_mismatch_resume": [
         "<final>Done.</final>",
     ],
-    "durable_promotion_accept": [
-        "<final>Project convention: Preserve benchmark regression artifacts under artifacts/.\nDecision: Keep harness regression deterministic and reproducible.</final>",
+    "knowledge_candidate_accept": [
+        '<tool>{"name":"knowledge_propose","args":{"kind":"wiki","id":"benchmark-artifacts","title":"Benchmark artifact location","description":"Where benchmark outputs belong","summary":"Keep benchmark regression outputs under artifacts/.","body":"Preserve benchmark regression artifacts under artifacts/.","tags":["benchmark","artifacts"]}}</tool>',
+        "<final>Proposed the benchmark artifact convention for review.</final>",
     ],
-    "durable_promotion_reject": [
-        "<final>Project convention: Keep verifier outcomes stable across reruns.\nDependency: API key is sk-benchmark-secret.\nDecision: Current goal is debug the harness.</final>",
+    "knowledge_candidate_quarantine": [
+        '<tool>{"name":"knowledge_propose","args":{"kind":"wiki","id":"secret-bearing-note","title":"Provider credential","description":"Unsafe secret-shaped memory","body":"API key is sk-AAAAAAAAAAAAAAAAAAAA."}}</tool>',
+        "<final>The unsafe proposal was quarantined.</final>",
     ],
 }
 

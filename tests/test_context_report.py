@@ -66,7 +66,7 @@ def test_context_report_builder_matches_existing_metadata_contract():
         "history": 60,
     }
     selected_notes = [
-        {"text": "note one", "source": "topic-one", "kind": "durable"},
+        {"text": "note one", "source": "session", "kind": "episodic"},
         {"text": "note two", "source": "session", "kind": "episodic"},
     ]
     section_texts = {"current_request": "Current user request:\nship it"}
@@ -96,9 +96,8 @@ def test_context_report_builder_matches_existing_metadata_contract():
             "limit": 3,
             "selected_count": 2,
             "selected_notes": ["note one", "note two"],
-            "selected_sources": ["topic-one", "session"],
-            "selected_kinds": ["durable", "episodic"],
-            "selected_durable_count": 1,
+            "selected_sources": ["session", "session"],
+            "selected_kinds": ["episodic", "episodic"],
             "raw_chars": 38,
             "rendered_chars": 27,
             "rendered_notes": ["note one"],

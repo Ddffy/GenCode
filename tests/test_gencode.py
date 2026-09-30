@@ -1548,7 +1548,7 @@ def test_partial_success_creates_process_note_for_exploration_history(tmp_path):
     assert "README.md" in process_notes[-1]["tags"]
 
 
-def test_explicit_memory_promotion_persists_durable_memory_topics(tmp_path):
+def test_final_labels_do_not_write_to_legacy_durable_memory(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1565,25 +1565,11 @@ def test_explicit_memory_promotion_persists_durable_memory_topics(tmp_path):
 
     assert "Project convention:" in answer
 
-    index_path = tmp_path / ".gencode" / "memory" / "MEMORY.md"
-    conventions_path = tmp_path / ".gencode" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".gencode" / "memory" / "topics" / "key-decisions.md"
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-
-    assert index_path.exists()
-    assert conventions_path.exists()
-    assert decisions_path.exists()
-    assert "project-conventions" in index_path.read_text(encoding="utf-8")
-    assert "Use constrained tools instead of guessing." in conventions_path.read_text(encoding="utf-8")
-    assert "Keep durable memory topic-based and lightweight." in decisions_path.read_text(encoding="utf-8")
-    assert report["durable_promotions"] == [
-        "project-conventions: Use constrained tools instead of guessing.",
-        "project-conventions: Preserve local agent state under .gencode/.",
-        "key-decisions: Keep durable memory topic-based and lightweight.",
-    ]
+    assert not (tmp_path / ".gencode" / "memory").exists()
+    assert not agent.knowledge_store.list_records(include_inactive=True)
 
 
-def test_final_memory_tags_are_appended_to_daily_log(tmp_path):
+def test_final_memory_tags_are_not_an_ingestion_protocol(tmp_path):
     agent = build_agent(
         tmp_path,
         ["<final>Done. <memory>Preference: keep reports concise.</memory></final>"],
@@ -1591,21 +1577,11 @@ def test_final_memory_tags_are_appended_to_daily_log(tmp_path):
 
     assert agent.ask("Remember this if useful") == "Done. <memory>Preference: keep reports concise.</memory>"
 
-    log_files = list((tmp_path / ".gencode" / "memory" / "logs").rglob("*.md"))
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    events = agent.session_store.event_path(agent.session["id"]).read_text(encoding="utf-8")
-    trace = agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8")
-
-    assert len(log_files) == 1
-    assert "Preference: keep reports concise." in log_files[0].read_text(encoding="utf-8")
-    assert report["memory_maintenance"]["memory_tags_appended"][0]["source"] == "final_answer"
-    assert report["memory_maintenance"]["memory_tags_appended"][0]["path"].startswith(".gencode/memory/logs/")
-    assert report["memory_maintenance"]["auto_dream"]["triggered"] is False
-    assert "memory_note_appended" in events
-    assert "memory_auto_dream_skipped" in trace
+    assert not (tmp_path / ".gencode" / "memory").exists()
+    assert not agent.knowledge_store.list_records(include_inactive=True)
 
 
-def test_memory_maintenance_report_explains_auto_dream_skip_reason(tmp_path):
+def test_knowledge_maintenance_report_explains_auto_dream_skip_reason(tmp_path):
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
 
     assert agent.ask("Finish without enough sessions") == "Done."
@@ -1613,35 +1589,30 @@ def test_memory_maintenance_report_explains_auto_dream_skip_reason(tmp_path):
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
     trace = agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8")
 
-    assert report["memory_maintenance"]["auto_dream"] == {
-        "enabled": True,
-        "triggered": False,
-        "skip_reason": "session_gate",
-        "session_count": 0,
-        "session_ids": [],
-        "changed_files": [],
-    }
-    assert "memory_auto_dream_skipped" in trace
+    assert report["knowledge_maintenance"]["auto_dream"]["enabled"] is True
+    assert report["knowledge_maintenance"]["auto_dream"]["triggered"] is False
+    assert report["knowledge_maintenance"]["auto_dream"]["skip_reason"] == "session_gate"
+    assert "knowledge.maintenance" in trace
 
 
-def test_memory_maintenance_failure_does_not_mask_final_answer(tmp_path, monkeypatch):
+def test_knowledge_maintenance_failure_does_not_mask_final_answer(tmp_path, monkeypatch):
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
 
     def fail_memory_maintenance(_final_answer):
         raise RuntimeError("memory disk is unavailable")
 
-    monkeypatch.setattr(agent, "maintain_memory_after_turn", fail_memory_maintenance)
+    monkeypatch.setattr(agent, "maintain_knowledge_after_turn", fail_memory_maintenance)
 
     assert agent.ask("Finish the task") == "Done."
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
     events = agent.session_store.event_path(agent.session["id"]).read_text(encoding="utf-8")
     trace = agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8")
-    assert report["memory_maintenance"]["errors"] == ["memory disk is unavailable"]
-    assert "memory_maintenance_failed" in events
-    assert "memory_maintenance_failed" in trace
+    assert report["knowledge_maintenance"]["errors"] == ["memory disk is unavailable"]
+    assert "knowledge_maintenance_failed" in events
+    assert "knowledge_maintenance_failed" in trace
 
 
-def test_memory_dir_is_workspace_relative_and_repo_local(tmp_path):
+def test_legacy_memory_dir_option_is_ignored(tmp_path):
     workspace = build_workspace(tmp_path)
     store = SessionStore(tmp_path / ".gencode" / "sessions")
 
@@ -1652,27 +1623,34 @@ def test_memory_dir_is_workspace_relative_and_repo_local(tmp_path):
         memory_dir="custom-memory",
     )
 
-    assert agent.memory_dir == tmp_path / "custom-memory"
-
-    with pytest.raises(ValueError, match="memory_dir must stay inside workspace"):
-        GenCode(
-            model_client=ScriptedModelClient([]),
-            workspace=workspace,
-            session_store=store,
-            memory_dir=tmp_path.parent / f"{tmp_path.name}-outside",
-        )
+    assert agent.memory_dir is None
+    assert not (tmp_path / "custom-memory").exists()
+    assert agent.knowledge_store.root == tmp_path / ".gencode" / "knowledge"
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
 def test_auto_dream_runs_in_background_after_session_gate(tmp_path):
+    sessions_root = tmp_path / ".gencode" / "sessions"
+    sessions_root.mkdir(parents=True, exist_ok=True)
     for index in range(2):
-        (tmp_path / ".gencode" / "sessions" / f"older-{index}.json").parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / ".gencode" / "sessions" / f"older-{index}.json").write_text("{}", encoding="utf-8")
+        (sessions_root / f"older-{index}.json").write_text(
+            json.dumps(
+                {
+                    "id": f"older-{index}",
+                    "workspace_root": str(tmp_path),
+                    "history": [
+                        {"role": "user", "content": "Remember the test workflow."},
+                        {"role": "assistant", "content": "Run pytest from the repo root."},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     agent = build_agent(
         tmp_path,
         [
-            "<final><memory>Project: use repo-local memory.</memory></final>",
-            '<tool>{"name":"read_file","args":{"path":".gencode/memory/MEMORY.md","start":1,"end":50}}</tool>',
-            '<tool>{"name":"write_file","args":{"path":".gencode/memory/MEMORY.md","content":"# Durable Memory Index\\n\\n- [Project](topics/project.md): Project memory\\n"}}</tool>',
+            "<final>Done.</final>",
+            '<tool>{"name":"knowledge_propose","args":{"kind":"wiki","id":"test-workflow","title":"Test workflow","description":"How to run tests","body":"Run pytest from the repository root.","source_sessions":["older-0"]}}</tool>',
             "<final>Dreamed.</final>",
         ],
         dream_min_sessions=2,
@@ -1683,62 +1661,58 @@ def test_auto_dream_runs_in_background_after_session_gate(tmp_path):
 
     report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
 
-    assert answer == "<memory>Project: use repo-local memory.</memory>"
-    assert report["memory_maintenance"]["auto_dream"]["triggered"] is True
-    assert report["memory_maintenance"]["auto_dream"]["status"] == "submitted"
-    assert report["memory_maintenance"]["auto_dream"]["session_count"] == 2
-    assert report["memory_maintenance"]["auto_dream"]["changed_files"] == []
+    assert answer == "Done."
+    assert report["knowledge_maintenance"]["auto_dream"]["triggered"] is True
+    assert report["knowledge_maintenance"]["auto_dream"]["status"] == "submitted"
+    assert report["knowledge_maintenance"]["auto_dream"]["session_count"] >= 2
 
-    # Background dream starts a nested runtime and can exceed two seconds on
-    # Windows/CI even though it is progressing normally.
     agent.wait_for_memory_maintenance(timeout=10)
 
-    post_report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    trace = agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8")
-    assert "Project memory" in (tmp_path / ".gencode" / "memory" / "MEMORY.md").read_text(encoding="utf-8")
-    assert agent.last_memory_maintenance["auto_dream"]["status"] == "finished"
-    assert post_report["memory_maintenance"]["auto_dream"]["changed_files"] == [".gencode/memory/MEMORY.md"]
-    assert "memory_auto_dream_finished" in trace
-    assert ".gencode/memory/MEMORY.md" in trace
+    assert agent.last_knowledge_maintenance["auto_dream"]["status"] == "finished"
+    candidate = agent.knowledge_store.get(
+        "test-workflow", kind="wiki", include_inactive=True
+    )
+    assert candidate["status"] == "candidate"
+    assert candidate["provenance"]["source"] == "dream"
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
 def test_background_auto_dream_failure_restores_lock_and_reports_error(tmp_path, monkeypatch):
-    memory_root = tmp_path / ".gencode" / "memory"
-    memory_root.mkdir(parents=True)
-    lock_path = memory_root / ".consolidate-lock"
-    lock_path.write_text("released", encoding="utf-8")
-    os.utime(lock_path, (123, 123))
+    sessions_root = tmp_path / ".gencode" / "sessions"
+    sessions_root.mkdir(parents=True, exist_ok=True)
     for index in range(2):
-        session_path = tmp_path / ".gencode" / "sessions" / f"older-{index}.json"
-        session_path.parent.mkdir(parents=True, exist_ok=True)
-        session_path.write_text("{}", encoding="utf-8")
+        (sessions_root / f"older-{index}.json").write_text(
+            json.dumps(
+                {
+                    "id": f"older-{index}",
+                    "workspace_root": str(tmp_path),
+                    "history": [{"role": "user", "content": "old turn"}],
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def fail_dream(*_args, **_kwargs):
         raise RuntimeError("dream provider unavailable")
 
-    monkeypatch.setattr("gencode.features.memory.run_dream", fail_dream)
+    monkeypatch.setattr("gencode.features.dream.run_dream", fail_dream)
     agent = build_agent(
         tmp_path,
-        ["<final><memory>Project: keep memory observable.</memory></final>"],
+        ["<final>Done.</final>"],
         dream_min_sessions=2,
         dream_interval_hours=0,
     )
 
-    assert agent.ask("Finish and trigger failing memory maintenance") == "<memory>Project: keep memory observable.</memory>"
+    assert agent.ask("Finish and trigger failing knowledge maintenance") == "Done."
 
     agent.wait_for_memory_maintenance(timeout=2)
 
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    events = agent.session_store.event_path(agent.session["id"]).read_text(encoding="utf-8")
-    trace = agent.run_store.trace_path(agent.current_task_state).read_text(encoding="utf-8")
-    assert report["memory_maintenance"]["auto_dream"]["status"] == "failed"
-    assert report["memory_maintenance"]["errors"] == ["dream provider unavailable"]
-    assert int(lock_path.stat().st_mtime) == 123
-    assert "memory_auto_dream_failed" in events
-    assert "memory_auto_dream_failed" in trace
+    assert agent.last_knowledge_maintenance["auto_dream"]["status"] == "failed"
+    assert agent.last_knowledge_maintenance["errors"] == ["dream provider unavailable"]
+    assert not (tmp_path / ".gencode" / "knowledge" / ".dream.lock").exists()
 
 
-def test_explicit_memory_promotion_accepts_bullet_prefixed_labels(tmp_path):
+def test_final_answer_bullets_are_not_legacy_memory_intake(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1750,21 +1724,11 @@ def test_explicit_memory_promotion_accepts_bullet_prefixed_labels(tmp_path):
 
     agent.ask("Remember these stable facts and return only the promoted facts.")
 
-    conventions_path = tmp_path / ".gencode" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".gencode" / "memory" / "topics" / "key-decisions.md"
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-
-    assert conventions_path.exists()
-    assert decisions_path.exists()
-    assert "Keep manual black-box artifacts under artifacts/." in conventions_path.read_text(encoding="utf-8")
-    assert "Use CLI-level testing before implementation claims." in decisions_path.read_text(encoding="utf-8")
-    assert report["durable_promotions"] == [
-        "project-conventions: Keep manual black-box artifacts under artifacts/.",
-        "key-decisions: Use CLI-level testing before implementation claims.",
-    ]
+    assert not agent.knowledge_store.list_records(include_inactive=True)
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
-def test_explicit_memory_promotion_supports_chinese_intent_and_labels(tmp_path):
+def test_chinese_final_answer_labels_are_not_legacy_memory_intake(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1777,14 +1741,11 @@ def test_explicit_memory_promotion_supports_chinese_intent_and_labels(tmp_path):
 
     assert "项目约定：" in answer
 
-    conventions_path = tmp_path / ".gencode" / "memory" / "topics" / "project-conventions.md"
-    decisions_path = tmp_path / ".gencode" / "memory" / "topics" / "key-decisions.md"
-
-    assert "优先使用受约束工具，不要靠猜。" in conventions_path.read_text(encoding="utf-8")
-    assert "持久记忆保持轻量、按 topic 管理。" in decisions_path.read_text(encoding="utf-8")
+    assert not agent.knowledge_store.list_records(include_inactive=True)
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
-def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp_path):
+def test_legacy_final_answer_classification_does_not_create_candidates(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1797,23 +1758,11 @@ def test_explicit_memory_promotion_rejects_secret_shaped_and_transient_lines(tmp
 
     agent.ask("Capture these stable facts into durable memory.")
 
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    conventions_path = tmp_path / ".gencode" / "memory" / "topics" / "project-conventions.md"
-    dependency_path = tmp_path / ".gencode" / "memory" / "topics" / "dependency-facts.md"
-
-    assert report["durable_promotions"] == [
-        "project-conventions: Use constrained tools instead of guessing.",
-    ]
-    assert report["durable_rejections"] == [
-        "dependency-facts:secret_shaped",
-        "key-decisions:transient_task_state",
-        "dependency-facts:noisy_output",
-    ]
-    assert "Use constrained tools instead of guessing." in conventions_path.read_text(encoding="utf-8")
-    assert not dependency_path.exists()
+    assert not agent.knowledge_store.list_records(include_inactive=True)
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
-def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
+def test_final_answer_updates_do_not_mutate_legacy_memory(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1825,18 +1774,11 @@ def test_explicit_memory_promotion_supersedes_matching_durable_fact(tmp_path):
     assert agent.ask("Capture this stable dependency fact into durable memory.") == "Dependency: Python runtime is 3.11."
     assert agent.ask("Save the updated dependency fact into durable memory.") == "Dependency: Python runtime is 3.12."
 
-    dependency_path = tmp_path / ".gencode" / "memory" / "topics" / "dependency-facts.md"
-    report = json.loads(agent.run_store.report_path(agent.current_task_state).read_text(encoding="utf-8"))
-    text = dependency_path.read_text(encoding="utf-8")
-
-    assert "Python runtime is 3.12." in text
-    assert "Python runtime is 3.11." not in text
-    assert report["durable_superseded"] == [
-        "dependency-facts: Python runtime is 3.11. -> Python runtime is 3.12.",
-    ]
+    assert not agent.knowledge_store.list_records(include_inactive=True)
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
-def test_explicit_memory_promotion_dedupes_duplicate_durable_note(tmp_path):
+def test_repeated_final_answer_facts_are_not_silently_stored(tmp_path):
     agent = build_agent(
         tmp_path,
         [
@@ -1848,10 +1790,8 @@ def test_explicit_memory_promotion_dedupes_duplicate_durable_note(tmp_path):
     agent.ask("Capture the stable fact into durable memory.")
     agent.ask("Capture the stable fact into durable memory again.")
 
-    conventions_path = tmp_path / ".gencode" / "memory" / "topics" / "project-conventions.md"
-    text = conventions_path.read_text(encoding="utf-8")
-
-    assert text.count("Use constrained tools instead of guessing.") == 1
+    assert not agent.knowledge_store.list_records(include_inactive=True)
+    assert not (tmp_path / ".gencode" / "memory").exists()
 
 
 def test_agent_records_model_cache_metadata_in_last_prompt_metadata(tmp_path):

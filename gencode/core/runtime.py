@@ -148,8 +148,10 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
             self.feature_flags.update(
                 {str(key): bool(value) for key, value in feature_flags.items()}
             )
-        self.memory_dir = self._resolve_memory_dir(memory_dir)
-        memorylib.ensure_memory_dir(self.memory_dir)
+        # ``memory_dir`` is accepted for source compatibility only. Durable
+        # knowledge now has one store: ``.gencode/knowledge``; session-scoped
+        # LayeredMemory remains in the session JSON and is not cross-session.
+        self.memory_dir = None
         self.auto_dream = bool(auto_dream)
         self.dream_interval_hours = float(dream_interval_hours)
         self.dream_min_sessions = int(dream_min_sessions)
@@ -226,12 +228,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         self.current_run_dir = None
         self.last_prompt_metadata = {}
         self.last_completion_metadata = {}
-        self.last_durable_promotions = []
-        self.last_durable_rejections = []
-        self.last_durable_superseded = []
-        self.last_memory_maintenance = memorylib.default_memory_maintenance_audit(
-            auto_dream=self.auto_dream
-        )
+        self.last_memory_maintenance = {"errors": [], "auto_dream": {}}
         self.last_dream_changed_files = []
         self._memory_maintenance_thread = None
         self._last_tool_result_metadata = {}
@@ -250,17 +247,6 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
             session=session_store.load(session_id),
             **kwargs,
         )
-
-    def _resolve_memory_dir(self, memory_dir):
-        if memory_dir:
-            path = Path(memory_dir).expanduser()
-            path = path if path.is_absolute() else self.root / path
-        else:
-            path = self.root / ".gencode" / "memory"
-        resolved = path.resolve()
-        if os.path.commonpath([str(self.root), str(resolved)]) != str(self.root):
-            raise ValueError(f"memory_dir must stay inside workspace: {memory_dir}")
-        return resolved
 
     def _ensure_session_shape(self):
         self.session.setdefault("history", [])
@@ -670,33 +656,19 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
             trigger=trigger, keep_recent_turns=keep_recent_turns, summary_mode=summary_mode
         )
 
-    def durable_memory_index_text(self):
-        return memorylib.load_memory_index_text(self.memory_dir)
-
-    def remember_durable_note(self, text):
-        path = memorylib.append_to_daily_log(self.memory_dir, text)
-        if path:
-            self.session_event_bus.emit(
-                "memory_note_appended",
-                {
-                    "source": "slash_command",
-                    "path": memorylib._agent_relative_path(self, path),
-                    "chars": len(str(text).strip()),
-                },
-            )
-        return path
+    def remember_knowledge_note(self, text):
+        return self.run_knowledge_dream(extra_notes=[str(text)])
 
     def memory_command_text(self):
-        index = self.durable_memory_index_text()
-        if index:
-            return index
-        return "No durable memories yet. Use /remember <text> and /dream to consolidate daily logs."
+        return self.knowledge_command_text()
 
     def run_dream(self, quiet=False, session_ids=None):
-        return memorylib.run_dream(self, quiet=quiet, session_ids=session_ids)
+        return self.run_knowledge_dream(quiet=quiet, session_ids=session_ids)
 
     def maintain_memory_after_turn(self, final_answer):
-        return memorylib.maintain_memory_after_turn(self, final_answer)
+        # Backward-compatible alias; durable maintenance is handled by Dream
+        # and the Skill/Wiki/Spec store, never by daily logs or MEMORY.md.
+        return self.maintain_knowledge_after_turn(final_answer)
 
     def wait_for_memory_maintenance(self, timeout=None):
         thread = self._memory_maintenance_thread
@@ -803,17 +775,6 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         self.memory.append_note(text, tags=tuple(tags), source=name, kind="process")
         self.session["memory"] = self.memory.to_dict()
 
-    def reject_durable_reason(self, note_text):
-        return memorylib.reject_durable_reason(note_text, redacted_value=REDACTED_VALUE)
-
-    def extract_durable_promotions(self, user_message, final_answer):
-        return memorylib.extract_durable_promotions(
-            user_message, final_answer, redacted_value=REDACTED_VALUE
-        )
-
-    def promote_durable_memory(self, user_message, final_answer):
-        return memorylib.promote_durable_memory(self, user_message, final_answer)
-
     def ask(self, user_message):
         return self.engine.ask(user_message)
 
@@ -876,10 +837,6 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
             "resume_status": task_state.resume_status,
             "task_state": task_state.to_dict(),
             "prompt_metadata": self.last_prompt_metadata,
-            "durable_promotions": list(self.last_durable_promotions),
-            "durable_rejections": list(self.last_durable_rejections),
-            "durable_superseded": list(self.last_durable_superseded),
-            "memory_maintenance": dict(self.last_memory_maintenance),
             **self.knowledge_report_fields(),
             "redacted_env": self.detected_secret_env_summary(),
             "compactions": list(self.session.get("compactions", [])),

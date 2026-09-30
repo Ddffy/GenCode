@@ -2,7 +2,12 @@
 
 from ..config import resolve_project_retrieval_config
 from ..features import knowledge as knowledgelib
+from ..features.knowledge_proposal import propose_candidate
 from ..features import skills as skillslib
+
+
+def _empty_maintenance_audit():
+    return {"candidates": [], "quarantined": [], "errors": [], "auto_dream": {}}
 
 
 class RuntimeKnowledgeMixin:
@@ -18,11 +23,9 @@ class RuntimeKnowledgeMixin:
         self.last_knowledge_retrieval = None
         self.last_code_retrieval = None
         self.last_citation_validation = {}
-        self.last_knowledge_maintenance = {
-            "candidates": [],
-            "quarantined": [],
-            "errors": [],
-        }
+        self.last_knowledge_maintenance = _empty_maintenance_audit()
+        self.knowledge_source_sessions = {str(self.session.get("id", ""))}
+        self.knowledge_proposal_source = "assistant_tool"
 
     def ensure_knowledge_session_shape(self):
         knowledge = self.session.setdefault("knowledge", {"active_specs": []})
@@ -80,23 +83,30 @@ class RuntimeKnowledgeMixin:
         )
         return "Bound specs: " + (", ".join(current) if current else "none")
 
-    def maintain_knowledge_after_turn(self, final_answer):
-        if not self.feature_enabled("typed_knowledge"):
-            audit = {
-                "candidates": [],
-                "quarantined": [],
-                "errors": [],
-                "skip_reason": "disabled",
-            }
-            self.last_knowledge_maintenance = audit
-            return audit
-        audit = self.knowledge_store.maintain_from_final(
-            final_answer,
-            session_id=self.session.get("id", ""),
-            run_id=getattr(self, "current_run_id", ""),
-        )
+    def propose_knowledge_candidate(self, args):
+        return propose_candidate(self, args)
+
+    def maintain_knowledge_after_turn(self, final_answer=""):
+        # Final answers are ordinary user-facing prose. Candidate creation uses
+        # the structured knowledge_propose tool; no XML tag scraping here.
+        from ..features import dream as dreamlib
+
+        audit = dict(self.last_knowledge_maintenance or {})
+        audit.setdefault("candidates", [])
+        audit.setdefault("quarantined", [])
+        audit.setdefault("errors", [])
+        auto = dreamlib.maintain_after_turn(self)
+        audit["auto_dream"] = auto.get("auto_dream", {})
+        audit["errors"].extend(auto.get("errors", []))
         self.last_knowledge_maintenance = audit
         return audit
+
+    def run_knowledge_dream(self, *, quiet=False, session_ids=None, extra_notes=()):
+        from ..features import dream as dreamlib
+
+        return dreamlib.run_dream(
+            self, quiet=quiet, session_ids=session_ids, extra_notes=extra_notes
+        )
 
     def knowledge_report_fields(self):
         retrieval = (
@@ -116,8 +126,4 @@ class RuntimeKnowledgeMixin:
         self.last_knowledge_retrieval = None
         self.last_code_retrieval = None
         self.last_citation_validation = {}
-        self.last_knowledge_maintenance = {
-            "candidates": [],
-            "quarantined": [],
-            "errors": [],
-        }
+        self.last_knowledge_maintenance = _empty_maintenance_audit()

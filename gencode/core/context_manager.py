@@ -130,8 +130,6 @@ class ContextManager:
             checkpoint_text = str(self.agent.render_checkpoint_text() or "").strip()
         if checkpoint_text:
             section_texts["memory"] += "\n\n" + checkpoint_text
-        if memory_enabled and hasattr(self.agent, "memory_dir"):
-            section_texts["memory"] += "\n\n" + memorylib.build_memory_system_section(self.agent.memory_dir)
         selected_notes = []
         if memory_enabled and relevant_memory_enabled and hasattr(self.agent, "memory") and hasattr(self.agent.memory, "retrieval_candidates"):
             selected_notes = self.agent.memory.retrieval_candidates(user_message, limit=RELEVANT_MEMORY_LIMIT)

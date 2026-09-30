@@ -206,8 +206,8 @@ def build_agent(args):
     fixed_session_id = getattr(args, "session_id", None)#固定 session ID，固定使用这个 ID，不存在就创建
     if session_id == "latest":
         session_id = store.latest()
-    #从配置中取出记忆保存位置，是否进行记忆整合，memory是短期的原始记忆，也就是窗口上下文，dream就是整合的长期记忆
-    memory_dir = getattr(args, "memory_dir", None)
+    # Working memory is session-scoped; durable Skill/Wiki/Spec lives in one
+    # KnowledgeStore. The legacy --memory-dir option is accepted but ignored.
     auto_dream = not getattr(args, "no_auto_dream", False)
     dream_interval = getattr(args, "dream_interval", 24.0)
     dream_min_sessions = getattr(args, "dream_min_sessions", 5)
@@ -239,7 +239,6 @@ def build_agent(args):
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
             secret_env_names=configured_secret_names,
-            memory_dir=memory_dir,
             auto_dream=auto_dream,
             dream_interval_hours=dream_interval,
             dream_min_sessions=dream_min_sessions,
@@ -276,7 +275,6 @@ def build_agent(args):
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
         secret_env_names=configured_secret_names,
-        memory_dir=memory_dir,
         auto_dream=auto_dream,
         dream_interval_hours=dream_interval,
         dream_min_sessions=dream_min_sessions,
@@ -380,12 +378,12 @@ def build_arg_parser():
     parser.add_argument(
         "--memory-dir",
         default=None,
-        help="Memory directory. Defaults to .gencode/memory in the workspace.",
+        help="Deprecated and ignored. Durable knowledge is stored in .gencode/knowledge.",
     )
     parser.add_argument(
         "--no-auto-dream",
         action="store_true",
-        help="Disable automatic memory consolidation.",
+        help="Disable automatic Dream extraction of typed-knowledge candidates.",
     )
     parser.add_argument(
         "--no-repo-map",
@@ -536,8 +534,10 @@ def handle_repl_command(agent, user_input):
         _, _, note = user_input.partition(" ")
         if not note.strip():
             return True, False, "Usage: /remember <text>"
-        agent.remember_durable_note(note)
-        return True, False, "Saved to daily log."
+        try:
+            return True, False, agent.remember_knowledge_note(note)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return True, False, f"Dream failed: {exc}"
     if user_input == "/dream":
         return True, False, agent.run_dream()
     if user_input == "/skills":

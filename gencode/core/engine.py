@@ -85,6 +85,9 @@ class Engine:
         agent.current_task_state = task_state
         agent.current_turn_id = task_state.task_id
         agent.current_run_id = task_state.run_id
+        agent.last_knowledge_maintenance = {
+            "candidates": [], "quarantined": [], "errors": [], "auto_dream": {}
+        }
         agent.current_run_dir = agent.run_store.start_run(task_state)
         # Git 基线必须在本轮第一个工具动作前捕获；后续每个写操作都只
         # 提交本轮新增的安全路径，验收失败时才能精确回到上一个 Agent 提交。
@@ -169,8 +172,6 @@ class Engine:
                 knowledge_trace = agent.knowledge_store.trace_retrieval(structured_knowledge)
                 task_state.knowledge_selections = knowledge_trace
                 agent.emit_trace(task_state, "knowledge.retrieval", knowledge_trace)
-            for file_read in memorylib.memory_file_read_payloads(agent.memory_dir, agent.root, reason="retrieval"):
-                agent.emit_trace(task_state, "memory.file_read", file_read)
             handle_prompt_checkpoints(self, task_state, user_message, prompt_metadata)
             agent.emit_trace(
                 task_state,
