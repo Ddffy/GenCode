@@ -1,4 +1,0 @@
-How to Interview AI Engineers
-   | Let the LLM do it
-     | That too haha
-   | Not really in touch with this type of article. Comparing tools seems a bit meaningless to me; I prefer to focus on the engineering side of being an AI engineer — what they built, how they built it, and what AI brings to the table compared to traditional programming.

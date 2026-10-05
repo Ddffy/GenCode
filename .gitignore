@@ -29,6 +29,8 @@ htmlcov/
 
 # Local scratch space
 tmp/
+/.zzresearch/
+/tmp-typed-eval/
 .worktrees/
 # Legacy Pico state remains ignored during the naming migration.
 .pico/

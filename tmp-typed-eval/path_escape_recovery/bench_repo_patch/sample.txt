@@ -1,4 +1,0 @@
-alpha-guarded
-beta
-gamma
-placeholder
