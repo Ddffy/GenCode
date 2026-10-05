@@ -219,6 +219,8 @@ class GenCodeTuiApp(App):
         if event_type == "model_parsed":
             kind = event.get("kind", "")
             self.query_one(ThinkingIndicator).set_detail(f"model returned {kind}")
+            if kind in {"tool", "tools"}:
+                self._streaming_message = None
             return
         if event_type == "tool_call":
             name = str(event.get("name", ""))

@@ -333,6 +333,49 @@ async def test_tui_runs_agent_turn_and_renders_final_answer(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tui_starts_new_assistant_message_after_tool_call(tmp_path, monkeypatch):
+    from gencode.tui.app import GenCodeTuiApp
+    from gencode.tui.widgets import AssistantMessage, ChatLog, ToolCard
+
+    app = GenCodeTuiApp(build_agent(tmp_path, []))
+    events = [
+        {"type": "model_requested", "attempts": 1},
+        {"type": "text_delta", "content": "I'll inspect the worker manager."},
+        {"type": "model_parsed", "kind": "tools"},
+        {"type": "tool_call", "name": "read_file", "args": {"path": "worker_manager.py"}},
+        {"type": "tool_result", "name": "read_file", "content": "class WorkerManager: ..."},
+        {"type": "model_requested", "attempts": 2},
+        {"type": "text_delta", "content": "WorkerManager coordinates subagents."},
+        {"type": "model_parsed", "kind": "final"},
+        {"type": "final", "content": "WorkerManager coordinates subagents."},
+        {"type": "turn_finished"},
+    ]
+
+    async def subscribe_turn(run_id, after_seq=0):
+        for seq, event in enumerate(events[after_seq:], start=after_seq + 1):
+            yield {**event, "run_seq": seq}
+
+    monkeypatch.setattr(app.agent.engine, "subscribe_turn", subscribe_turn)
+
+    async with app.run_test() as pilot:
+        app._hide_welcome_banner()
+        await app._agent_task("", run_id="test-run")
+        await pilot.pause(delay=0.1)
+
+        chat = app.query_one(ChatLog)
+        messages = list(chat.query(AssistantMessage))
+        tool_card = chat.query_one(ToolCard)
+        timeline = list(chat.children)
+
+        assert [message.content for message in messages] == [
+            "I'll inspect the worker manager.",
+            "WorkerManager coordinates subagents.",
+        ]
+        assert timeline.index(messages[0]) < timeline.index(tool_card)
+        assert timeline.index(tool_card) < timeline.index(messages[1])
+
+
+@pytest.mark.asyncio
 async def test_tui_hides_welcome_after_first_turn_so_chat_stays_visible(tmp_path):
     from gencode.tui.app import GenCodeTuiApp
     from gencode.tui.widgets import ChatLog, InputBar, WelcomeBanner
