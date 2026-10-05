@@ -1,12 +1,15 @@
+import asyncio
 import os
 import subprocess
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from gencode.testing import ScriptedModelClient
+from conftest import run_tool
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode import cli as gencode_cli
 from gencode.core.task_state import TaskState
+from gencode.testing import ScriptedModelClient
 
 
 def build_workspace(tmp_path):
@@ -31,7 +34,7 @@ def test_workspace_escape_is_rejected(tmp_path):
     (tmp_path / "outside.txt").write_text("outside\n", encoding="utf-8")
     agent = build_agent(tmp_path, [])
 
-    result = agent.run_tool("read_file", {"path": "../outside.txt"})
+    result = run_tool(agent, "read_file", {"path": "../outside.txt"})
 
     assert "path escapes workspace" in result
 
@@ -42,7 +45,7 @@ def test_symlink_path_traversal_is_rejected(tmp_path):
     (tmp_path / "linked.txt").symlink_to(outside)
     agent = build_agent(tmp_path, [])
 
-    result = agent.run_tool("read_file", {"path": "linked.txt"})
+    result = run_tool(agent, "read_file", {"path": "linked.txt"})
 
     assert "path escapes workspace" in result
 
@@ -50,7 +53,7 @@ def test_symlink_path_traversal_is_rejected(tmp_path):
 def test_risky_tool_deny_behavior(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="never")
 
-    result = agent.run_tool("run_shell", {"command": "echo hi", "timeout": 20})
+    result = run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 20})
 
     assert result == "error: approval denied for run_shell"
 
@@ -151,7 +154,7 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
     command = subprocess.list2cmdline([sys.executable, "-c", script])
 
     with patch.dict(os.environ, {"MCA_ALLOWLIST_SECRET": secret}, clear=False):
-        result = agent.run_tool("run_shell", {"command": command, "timeout": 20})
+        result = run_tool(agent, "run_shell", {"command": command, "timeout": 20})
 
     assert secret not in result
     assert "missing" in result
@@ -160,16 +163,16 @@ def test_run_shell_uses_allowlisted_environment_only(tmp_path):
 def test_bound_tool_methods_call_tools_module(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="auto")
 
-    with patch("gencode.tools.registry.subprocess.run") as fake_run:
-        fake_run.return_value = type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": "toolkit-shell\n", "stderr": ""},
-        )()
-        shell_result = agent.tool_run_shell({"command": "echo bypass", "timeout": 20})
+    with patch(
+        "gencode.tools.registry.tool_run_shell_async",
+        new=AsyncMock(return_value="toolkit-shell"),
+    ) as fake_run:
+        shell_result = asyncio.run(
+            agent.tool_run_shell({"command": "echo bypass", "timeout": 20})
+        )
 
     assert "toolkit-shell" in shell_result
-    fake_run.assert_called_once()
+    fake_run.assert_awaited_once()
     assert agent.tool_run_shell.__func__.__module__ == "gencode.core.runtime"
 
 

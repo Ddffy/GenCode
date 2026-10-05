@@ -1,4 +1,5 @@
 import pytest
+from conftest import run_tool
 
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.cli import handle_repl_command
@@ -500,7 +501,7 @@ def test_knowledge_read_tool_is_read_only_and_bounded(tmp_path):
         description="A page for on demand reads",
         body="## Details\n" + ("important detail " * 1000),
     )
-    result = agent.run_tool(
+    result = run_tool(agent,
         "knowledge_read",
         {"id": "bounded-page", "section": "Details", "max_chars": 100},
     )

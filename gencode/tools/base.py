@@ -1,6 +1,6 @@
 """Tool abstraction shared by the runtime and prompt builder."""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -35,15 +35,15 @@ class RegisteredTool:
     schema: dict
     description: str
     risky: bool
-    runner: Callable[[dict], str]
+    runner: Callable[[dict], Awaitable[str]]
     capability: ToolCapability = ToolCapability()
 
     @property
     def read_only(self):
         return not self.risky
 
-    def execute(self, args):
-        result = self.runner(args)
+    async def execute(self, args):
+        result = await self.runner(args)
         if isinstance(result, ToolResult):
             return result
         return ToolResult(content=str(result))

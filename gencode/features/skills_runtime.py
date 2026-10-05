@@ -2,27 +2,48 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 
 from ..core.tool_profiles import ToolSetProfile
 
 
 def invoke_skill(agent, name, arguments=""):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(invoke_skill_async(agent, name, arguments))
+    raise RuntimeError("invoke_skill() cannot run inside an active event loop; use await invoke_skill_async().")
+
+
+async def invoke_skill_async(agent, name, arguments=""):
     skill = agent.skills.get(str(name).lstrip("/"))
     if not skill:
         raise KeyError(name)
     prompt = _skill_prompt(skill, arguments)
-    agent.session_event_bus.emit("skill_invoked", _event_payload(skill, arguments, prompt))
+    await agent.session_event_bus.publish(
+        "skill_invoked", _event_payload(skill, arguments, prompt)
+    )
     if skill.disable_model_invocation:
-        agent.session_event_bus.emit("skill_completed", _event_payload(skill, arguments, prompt, status="prompt_only"))
+        await agent.session_event_bus.publish(
+            "skill_completed",
+            _event_payload(skill, arguments, prompt, status="prompt_only"),
+        )
         return skill.render(arguments)
     with _model_override(agent, skill.model), _skill_tool_profile(agent, skill):
-        answer = _run_fork(agent, skill, prompt) if skill.context == "fork" else agent.ask(prompt)
-    agent.session_event_bus.emit("skill_completed", _event_payload(skill, arguments, prompt, status="completed", answer=answer))
+        answer = (
+            await _run_fork(agent, skill, prompt)
+            if skill.context == "fork"
+            else await agent.ask_async(prompt)
+        )
+    await agent.session_event_bus.publish(
+        "skill_completed",
+        _event_payload(skill, arguments, prompt, status="completed", answer=answer),
+    )
     return answer
 
 
-def _run_fork(agent, skill, prompt):
+async def _run_fork(agent, skill, prompt):
     child = type(agent)(
         model_client=agent.model_client,
         workspace=agent.workspace,
@@ -38,7 +59,7 @@ def _run_fork(agent, skill, prompt):
         feature_flags=agent.feature_flags,
     )
     with _model_override(child, skill.model), _skill_tool_profile(child, skill):
-        answer = child.ask(prompt)
+        answer = await child.ask_async(prompt)
     agent.session_event_bus.emit("skill_fork_completed", {"skill": skill.name, "child_session_id": child.session["id"]})
     return answer
 
@@ -91,11 +112,11 @@ def _model_override(agent, model):
         return
     sentinel = object()
     previous = getattr(agent.model_client, "model", sentinel)
-    setattr(agent.model_client, "model", model)
+    agent.model_client.model = model
     try:
         yield
     finally:
         if previous is sentinel:
             delattr(agent.model_client, "model")
         else:
-            setattr(agent.model_client, "model", previous)
+            agent.model_client.model = previous

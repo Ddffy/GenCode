@@ -578,7 +578,7 @@ def test_code_chunking_uses_symbol_boundaries(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "gencode.features.repomap.graph.load_tags",
-        lambda root, cache_dir=None: {"demo.py": tags},
+        lambda root, cache_dir=None, **_kwargs: {"demo.py": tags},
     )
 
     chunks = chunk_code_repository(tmp_path, workspace_id="workspace-1").children
@@ -587,6 +587,85 @@ def test_code_chunking_uses_symbol_boundaries(monkeypatch, tmp_path):
     assert chunks[0].start_line == 1
     assert chunks[0].end_line == 3
     assert "def beta" in chunks[1].text
+
+
+def test_code_sync_reuses_unchanged_files_and_only_rechunks_changed_file(
+    monkeypatch, tmp_path
+):
+    from gencode.features import repomap
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    (repo / "b.py").write_text("def beta():\n    return 2\n", encoding="utf-8")
+    service = HybridRetrievalService(
+        tmp_path / "index", workspace_id="workspace-1", config=_config()
+    )
+
+    first = service.sync_code(repo, embed=False)
+    assert first["changed"] is True
+    assert first["dense_complete"] is False
+    unchanged = service.sync_code(repo, embed=False)
+    assert unchanged["index_reused"] is True
+
+    changed_paths = set()
+    original_load_tags = repomap.graph.load_tags
+
+    def record_changed_paths(root, *, source_states=None, **kwargs):
+        changed_paths.update(source_states or {})
+        return original_load_tags(root, source_states=source_states, **kwargs)
+
+    monkeypatch.setattr(repomap.graph, "load_tags", record_changed_paths)
+    (repo / "a.py").write_text(
+        "def alpha():\n    return 'updated'\n", encoding="utf-8"
+    )
+
+    updated = service.sync_code(repo, embed=False)
+
+    assert updated["changed"] is True
+    assert changed_paths == {"a.py"}
+    assert {hit.chunk.path for hit in service.index.sparse_search(
+        "updated", top_k=10, workspace_id="workspace-1", source_types=("code",)
+    )} == {"a.py"}
+
+
+def test_dense_backfill_reuses_existing_code_chunks(monkeypatch, tmp_path):
+    class CountingEmbedder:
+        model_id = "test-code-embedder"
+
+        def __init__(self):
+            self.calls = 0
+
+        def embed_documents(self, texts):
+            self.calls += len(texts)
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, _query):
+            return [1.0, 0.0]
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "worker.py").write_text(
+        "def spawn_worker():\n    return 'worker'\n", encoding="utf-8"
+    )
+    embedder = CountingEmbedder()
+    service = HybridRetrievalService(
+        tmp_path / "index",
+        workspace_id="workspace-1",
+        config=_config(),
+        embedder=embedder,
+    )
+    service.sync_code(repo, embed=False)
+
+    def unexpected_rechunk(*_args, **_kwargs):
+        pytest.fail("dense backfill should reuse persisted chunks")
+
+    monkeypatch.setattr("gencode.features.retrieval.pipeline.chunk_code_repository", unexpected_rechunk)
+    result = service.sync_code(repo, embed=True)
+
+    assert result["index_reused"] is True
+    assert result["dense_complete"] is True
+    assert embedder.calls > 0
 
 
 def test_estimate_tokens_counts_wide_characters_individually():
@@ -630,7 +709,7 @@ def test_long_function_is_split_instead_of_truncated(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "gencode.features.repomap.graph.load_tags",
-        lambda root, cache_dir=None: {"demo.py": tags},
+        lambda root, cache_dir=None, **_kwargs: {"demo.py": tags},
     )
 
     chunks = chunk_code_repository(
@@ -702,6 +781,10 @@ def test_router_keeps_small_code_on_repo_map_and_large_code_hybrid():
     assert router.route(source_type="code", corpus_size=99)["strategy"] == "repo_map"
     assert (
         router.route(source_type="code", corpus_size=100)["strategy"]
+        == "mini_repo_map_plus_hybrid"
+    )
+    assert (
+        router.route(source_type="code", corpus_size=10, force_hybrid=True)["strategy"]
         == "mini_repo_map_plus_hybrid"
     )
     assert router.route(source_type="spec")["strategy"] == "explicit_binding"

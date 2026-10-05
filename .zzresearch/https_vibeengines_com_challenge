@@ -1,0 +1,648 @@
+URL: https://vibeengines.com/challenge
+
+before
+ first paint so a customized palette doesn't flash the default. Synchronous
+ and ahead of styles.css. The whole palette derives from these three. -->
+
+ Coding Challenges — Solve Them in Your Browser | Vibe Engines 
+
+ Skip to content 
+
+ Vibe Engines System design 
+ Learn 
+ Topics Browse 
+ Glossary 
+ Search Ctrl K YouTube ❯_ 
+
+ Search everything System design 01 AI system design 02 Software system design 03 Learning paths 04 Start here 05 Topics 06 Glossary Learn 07 FDE Academy · Trending 08 Handbooks 09 Roadmaps 10 Paper Breakdowns 11 Cheatsheets Practice 12 Challenges 13 Algorithms 14 Labs 15 Flashcards Design 16 Tools For your role 17 Engineers 18 Product Managers 19 Designers 20 My dashboard 21 About 22 Contact YouTube → GitHub → LinkedIn → 
+
+ CHALLENGES · SOLVE, DON'T SCROLL 
+ Code you write, not read. 
+ Interview-style problems you solve in the browser — in Python or TypeScript, with real runnable code and hidden tests that check your answer the moment you hit Run. Stub, hints, and a one-click reveal-solution when you're stuck. No account, no setup. 
+ 75 Challenges 
+ 2 Languages 
+ 100% Free · no sign-up 
+
+ Browse Handbooks 
+ Roadmaps 
+ System Design 
+ AI Systems 
+ Papers 
+ Algorithms 
+ Labs 
+ Challenges 
+ Cheatsheets 
+ Tools 
+ All 75 AI 5 AI Engineering 21 APIs 1 Agents 5 Arrays 3 BFS 2 BFS/DFS 1 CRDT 1 Caching 3 Causality 1 Chunking 1 Classification 1 Code Review 2 Compliance 1 Consensus 1 Consistency 2 Context 1 Data 5 Data Structures 8 Debugging 2 Decoding 3 Deep Learning 2 Design 3 Disjoint Set 1 Distributed Systems 6 Divide and Conquer 1 Dynamic Programming 3 Embeddings 2 Evals 1 FDE 15 Graphs 7 Greedy 1 Hash Map 3 Hashing 3 Heaps 2 Heuristics 1 Inference 2 Integration 1 Integrations 7 Interview 5 Interview Classic 4 LLM 2 Linear Algebra 1 Linked List 1 Loop Engineering 2 Loss Functions 1 Machine Learning 1 Math 4 NLP 3 Parsing 2 Pattern Matching 1 Probabilistic 2 Probability 1 Queue 1 RAG 3 RLVR 1 Raft 1 Rate Limiting 2 Recursion 3 Reliability 7 Retrieval 4 Sampling 3 Search 3 Security 2 Shortest Path 2 Sorting 1 Stack 3 Streaming 2 Strings 8 Structured Output 1 Systems 6 Tokenization 1 Tool Calling 1 Topological Sort 1 Transformers 2 Trie 1 Two Pointers 1 Verification 1 Warm-up 1 
+ All 75 Easy 20 Medium 49 Hard 6 
+ Start here two-sum.solve 
+
+ Challenge N° 01 Easy 
+ Two Sum
+ The classic warm-up: find the two numbers that add up to a target. Brute force is O(n²) — a hash map gets you to one pass, O(n). Solve it in Python or TypeScript, right in your browser, with hidden tests and a reveal-solution button.
+ Arrays Hash Map 
+ Solve in Python / TypeScript → 
+
+ valid-parentheses.solve 
+
+ Challenge N° 02 Easy 
+ Valid Parentheses
+ The canonical stack problem: decide whether every bracket is closed by the right type, in the right order. A stack turns nested matching into a single pass. Solve it in Python or TypeScript with hidden tests.
+ Stack Strings 
+ Solve in Python / TypeScript → 
+
+ fizzbuzz.solve 
+
+ Challenge N° 03 Easy 
+ Fizz Buzz
+ The famous screening question. Print 1…n, but multiples of 3 become "Fizz", of 5 become "Buzz", and of both become "FizzBuzz". Easy — the catch is testing divisibility in the right order. Solve it in Python or TypeScript.
+ Math Strings Warm-up 
+ Solve in Python / TypeScript → 
+
+ Start here softmax.solve 
+
+ Challenge N° 04 Easy 
+ Softmax
+ The function at the end of every classifier and language model: turn raw scores (logits) into a probability distribution. Implement the numerically stable version so big logits do not overflow. Solve it in Python or TypeScript.
+ AI Engineering LLM Decoding 
+ Solve in Python / TypeScript → 
+
+ cosine-similarity.solve 
+
+ Challenge N° 05 Easy 
+ Cosine Similarity
+ The measure behind every embedding search and RAG system: how aligned are two vectors, ignoring their length? Dot product over the product of magnitudes — 1 identical, 0 orthogonal, -1 opposite. Solve it in Python or TypeScript.
+ AI Engineering Embeddings Math 
+ Solve in Python / TypeScript → 
+
+ top-k-retrieval.solve 
+
+ Challenge N° 06 Medium 
+ Top-K Retrieval
+ The core of the "R" in RAG: given a query embedding and a set of document embeddings, return the indices of the k most similar docs by cosine similarity, with a stable tie-break. Solve it in Python or TypeScript.
+ AI Engineering RAG Retrieval Embeddings 
+ Solve in Python / TypeScript → 
+
+ token-f1.solve 
+
+ Challenge N° 07 Medium 
+ Token-Level F1
+ The metric behind QA evaluation (SQuAD and friends): how well does a predicted answer overlap a reference as a bag of words? Compute token precision and recall, then their harmonic-mean F1. Solve it in Python or TypeScript.
+ AI Engineering Evals NLP 
+ Solve in Python / TypeScript → 
+
+ single-head-attention.solve 
+
+ Challenge N° 08 Medium 
+ Single-Head Attention
+ The operation at the heart of every Transformer: scaled dot-product attention. Given queries, keys, and values, let each query pull a weighted blend of the values — softmax(QKᵀ/√d)·V — with a numerically stable softmax and no numpy, just the math. Solve it in Python or TypeScript.
+ AI Engineering Transformers LLM 
+ Solve in Python / TypeScript → 
+
+ layer-norm.solve 
+
+ Challenge N° 09 Easy 
+ Layer Normalization
+ The stabilizer wrapped around every Transformer sub-layer: re-center and re-scale a vector to mean 0 and variance 1, then let learned gamma and beta stretch and shift it back — y = gamma·(x−mean)/√(var+eps) + beta. Keeps deep nets trainable. Solve it in Python or TypeScript.
+ AI Engineering Transformers Deep Learning 
+ Solve in Python / TypeScript → 
+
+ cross-entropy.solve 
+
+ Challenge N° 10 Easy 
+ Cross-Entropy Loss
+ The loss that trains almost every classifier and language model. It measures how surprised the model was by the right answer — high probability on the true class → near 0, confidently wrong → explodes. Return -log(p[target]), eps-guarded. Solve it in Python or TypeScript.
+ AI Engineering Deep Learning Loss Functions 
+ Solve in Python / TypeScript → 
+
+ knn.solve 
+
+ Challenge N° 11 Medium 
+ K-Nearest Neighbors
+ The simplest classifier there is: to label a new point, look at the k closest labeled points and let them vote. No training, no weights — just Euclidean distances, with deterministic tie-breaks. The whole model is the dataset. Solve it in Python or TypeScript.
+ AI Engineering Machine Learning Classification 
+ Solve in Python / TypeScript → 
+
+ tf-idf.solve 
+
+ Challenge N° 12 Medium 
+ TF-IDF
+ The scoring that ran search for decades — and still seeds hybrid retrieval today. Reward a word frequent in one document but rare across the corpus, shrug off words that appear everywhere: tf·log(N/df). Solve it in Python or TypeScript.
+ AI Engineering NLP Retrieval 
+ Solve in Python / TypeScript → 
+
+ lru-cache.solve 
+
+ Challenge N° 13 Medium 
+ LRU Cache
+ The eviction policy behind every size-limited cache: when you run out of room, throw out whatever was used least recently. The trick is O(1) get and put — an ordered hash map (Python dict / JS Map) gives you exactly that. Solve it in Python or TypeScript.
+ Systems Caching Data Structures 
+ Solve in Python / TypeScript → 
+
+ retry-backoff.solve 
+
+ Challenge N° 14 Easy 
+ Retry with Exponential Backoff
+ Tools time out and APIs rate-limit — a production agent retries without hammering. Exponential backoff waits longer after each failure (1s, 2s, 4s, 8s…) up to a cap. Compute the delay schedule: delay[i] = min(cap, base·2ⁱ). Solve it in Python or TypeScript.
+ AI Engineering Agents Reliability 
+ Solve in Python / TypeScript → 
+
+ token-budget-trim.solve 
+
+ Challenge N° 15 Easy 
+ Trim History to a Token Budget
+ Every agent turn re-sends the whole conversation, so history must fit the context budget. Keep the most recent messages that fit and drop the oldest — the trimmer at the heart of context management. Solve it in Python or TypeScript.
+ AI Engineering Agents Context 
+ Solve in Python / TypeScript → 
+
+ tool-call-parser.solve 
+
+ Challenge N° 16 Medium 
+ Parse a Tool Call
+ When a model wants to act, it emits a call like search(query=cats, limit=5). Parse that string into a function name and typed arguments before the harness can dispatch it — the little parser that turns a model's intent into an action. Solve it in Python or TypeScript.
+ AI Engineering Agents Tool Calling 
+ Solve in Python / TypeScript → 
+
+ goal-loop.solve 
+
+ Challenge N° 17 Medium 
+ Run the Goal Loop
+ The engine of loop engineering: attempt the front task, let an independent verifier judge it, retry failures with state untouched, and stop when the goal is met — or loudly when the cap trips. Implement the whole outer loop as one pure, testable function. Solve it in Python or TypeScript.
+ AI Engineering Agents Loop Engineering 
+ Solve in Python / TypeScript → 
+
+ bm25.solve 
+
+ Challenge N° 18 Medium 
+ BM25 Scoring
+ The keyword-ranking function every fancy retriever still has to beat. Implement BM25 — term frequency that saturates, rare terms weighted up, long documents normalized down — the lexical half of every hybrid search pipeline. Solve it in Python or TypeScript.
+ AI Engineering Retrieval Search 
+ Solve in Python / TypeScript → 
+
+ bpe-merge.solve 
+
+ Challenge N° 19 Medium 
+ BPE Merge Step
+ One step of how every tokenizer vocabulary is built: count adjacent symbol pairs across the corpus, pick the most frequent (ties break lexicographically), and merge it everywhere, left to right, without overlaps. Run it a few thousand times and you have byte-pair encoding. Solve it in Python or TypeScript.
+ AI Engineering Tokenization NLP 
+ Solve in Python / TypeScript → 
+
+ mmr-rerank.solve 
+
+ Challenge N° 20 Medium 
+ MMR Reranking
+ Top-k by similarity returns five copies of the same paragraph. Implement Maximal Marginal Relevance: greedily pick results that are relevant to the query AND different from what you already picked — λ·relevance − (1−λ)·redundancy, with cosine similarity. Solve it in Python or TypeScript.
+ AI Engineering Retrieval RAG 
+ Solve in Python / TypeScript → 
+
+ streaming-median.solve 
+
+ Challenge N° 21 Medium 
+ Streaming Median
+ Latency dashboards do this every second: maintain the median of a stream without re-sorting per event. The classic two-heap trick — a max-heap for the low half, a min-heap for the high half, the median always at the boundary. Solve it in Python or TypeScript.
+ Data Structures Heaps Systems 
+ Solve in Python / TypeScript → 
+
+ token-bucket.solve 
+
+ Challenge N° 22 Medium 
+ Token Bucket Rate Limiter
+ The algorithm inside most production rate limiters — and it never runs a timer. Refill the bucket lazily from the time elapsed since the last request, cap at capacity, spend one token or reject. Two numbers of state per client, exactly like the Redis version. Solve it in Python or TypeScript.
+ Systems Rate Limiting Distributed Systems 
+ Solve in Python / TypeScript → 
+
+ circuit-breaker.solve 
+
+ Challenge N° 23 Medium 
+ Circuit Breaker
+ Stop one failing dependency from taking down the fleet: trip after consecutive failures, fail fast while open, probe once after the cooldown. Implement the closed → open → half-open state machine as a pure, testable replay. Solve it in Python or TypeScript.
+ Systems Reliability Distributed Systems 
+ Solve in Python / TypeScript → 
+
+ beam-search.solve 
+
+ Challenge N° 24 Medium 
+ Beam Search Decoder
+ Greedy decoding takes the best next token and never looks back — straight into garden paths. Keep the k best partial sequences alive at every step, with a product score and a clean tie-break, and watch k=2 escape a trap k=1 falls into. Solve it in Python or TypeScript.
+ AI Engineering Decoding Search 
+ Solve in Python / TypeScript → 
+
+ number-of-islands.solve 
+
+ Challenge N° 25 Medium 
+ Number of Islands
+ The canonical connected-components question. Flood-fill each unvisited patch of land with BFS or DFS, count how many floods you started — grid traversal, visited bookkeeping, and the classic diagonal trap. Solve it in Python or TypeScript.
+ Graphs BFS/DFS Interview Classic 
+ Solve in Python / TypeScript → 
+
+ merge-intervals.solve 
+
+ Challenge N° 26 Medium 
+ Merge Intervals
+ Calendar apps and memory allocators run on this: sort by start, sweep once, grow or close the current block. Touching endpoints merge, nested intervals vanish — the classic that punishes off-by-one thinking. Solve it in Python or TypeScript.
+ Sorting Arrays Interview Classic 
+ Solve in Python / TypeScript → 
+
+ top-k-frequent.solve 
+
+ Challenge N° 27 Medium 
+ Top-K Frequent Elements
+ Count, then rank — the two-step pattern behind trending topics and hot-key detection. A hash map counts; a (-count, value) sort ranks with a clean tie-break; buckets get you to O(n) if you want the flex. Solve it in Python or TypeScript.
+ Hash Map Heaps Interview Classic 
+ Solve in Python / TypeScript → 
+
+ three-sum.solve 
+
+ Challenge N° 28 Medium 
+ 3Sum
+ The rite of passage: every unique zero-sum triplet, no duplicates, no O(n³). Sort once, fix one element, squeeze the rest with two pointers, and skip duplicates at all three levels. Solve it in Python or TypeScript.
+ Two Pointers Arrays Interview Classic 
+ Solve in Python / TypeScript → 
+
+ union-find.solve 
+
+ Challenge N° 29 Medium 
+ Union-Find (Connected Components)
+ The disjoint-set behind Kruskal’s MST and network connectivity: answer "are these connected?" in near-constant time with union by rank and path compression, then count the components. Solve it in Python or TypeScript, with hidden tests.
+ Graphs Disjoint Set Data Structures 
+ Solve in Python / TypeScript → 
+
+ min-stack.solve 
+
+ Challenge N° 30 Easy 
+ Min Stack
+ A stack that also returns its minimum in O(1) — no scanning. Carry the running minimum alongside each element. Replay push/pop/top/getMin operations. Solve it in Python or TypeScript, with hidden tests.
+ Stack Data Structures Design 
+ Solve in Python / TypeScript → 
+
+ sliding-window-rate-limiter.solve 
+
+ Challenge N° 31 Medium 
+ Sliding-Window Rate Limiter
+ Allow at most N requests per rolling window — the rate limiter that guards real APIs. A sliding log of accepted timestamps gives exact limits without fixed-window bursts. Decide accept/reject for a stream. Solve it in Python or TypeScript, with hidden tests.
+ Systems Rate Limiting Queue 
+ Solve in Python / TypeScript → 
+
+ lfu-cache.solve 
+
+ Challenge N° 32 Hard 
+ LFU Cache
+ The cache that evicts what you use least often — and, on ties, least recently. Harder than LRU: track frequency and recency together, still O(1) per op. Replay get/put operations. Solve it in Python or TypeScript, with hidden tests.
+ Design Caching Hash Map 
+ Solve in Python / TypeScript → 
+
+ consistent-hash-ring.solve 
+
+ Challenge N° 33 Medium 
+ Consistent Hashing Ring
+ How distributed caches decide which node owns a key — with tiny churn when nodes join or leave. Build a hash ring with virtual nodes and route keys clockwise. A provided hash keeps Python and TypeScript in sync. Hidden tests.
+ Systems Distributed Systems Hashing 
+ Solve in Python / TypeScript → 
+
+ build-bloom-filter.solve 
+
+ Challenge N° 34 Medium 
+ Bloom Filter
+ A tiny bit-array that answers "have I seen this?" in a fraction of a set’s memory — with occasional false positives but never a false negative. Build one with double hashing. Provided hashes keep both languages in sync. Hidden tests.
+ Data Structures Probabilistic Hashing 
+ Solve in Python / TypeScript → 
+
+ implement-trie.solve 
+
+ Challenge N° 35 Medium 
+ Implement a Trie
+ The prefix tree behind autocomplete and spell-check: insert, search, and startsWith in time proportional to word length. Replay the operations on a tree keyed by characters. Solve it in Python or TypeScript, with hidden tests.
+ Trie Strings Design 
+ Solve in Python / TypeScript → 
+
+ kmp-failure-table.solve 
+
+ Challenge N° 36 Medium 
+ KMP Failure Table
+ The precomputation that makes KMP string search run in O(n): for every prefix, the longest proper prefix that is also a suffix. Get it right and matching never backtracks. Build it in Python or TypeScript, with hidden tests.
+ Strings Pattern Matching Dynamic Programming 
+ Solve in Python / TypeScript → 
+
+ lcs-diff.solve 
+
+ Challenge N° 37 Medium 
+ Longest Common Subsequence
+ The DP behind "git diff" and DNA alignment: the longest subsequence common to two strings (order kept, gaps allowed). A classic 2-D table in O(m·n). Solve it in Python or TypeScript, with hidden tests.
+ Dynamic Programming Strings 
+ Solve in Python / TypeScript → 
+
+ mini-regex-matcher.solve 
+
+ Challenge N° 38 Hard 
+ Mini Regex Matcher (. and *)
+ Implement regex matching with "." and "*" — the classic hard interview problem. The subtlety: "*" can match nothing or many, so you must explore both. Solve it with DP in Python or TypeScript, with hidden tests.
+ Dynamic Programming Strings Recursion 
+ Solve in Python / TypeScript → 
+
+ expression-calculator.solve 
+
+ Challenge N° 39 Medium 
+ Expression Calculator
+ Evaluate an arithmetic string with precedence and parentheses, the way an interpreter does. A tiny recursive-descent parser handles precedence naturally. Solve it in Python or TypeScript, with hidden tests.
+ Parsing Recursion Stack 
+ Solve in Python / TypeScript → 
+
+ json-parser.solve 
+
+ Challenge N° 40 Hard 
+ JSON Parser (Recursive Descent)
+ Write the parser behind every API and config file: turn a JSON string into native objects, arrays, numbers, strings, booleans and null — by hand, without the built-in parser. Recursive descent mirrors the grammar. Solve it in Python or TypeScript, with hidden tests.
+ Parsing Recursion Strings 
+ Solve in Python / TypeScript → 
+
+ dijkstra.solve 
+
+ Challenge N° 41 Medium 
+ Dijkstra’s Shortest Paths
+ The algorithm every routing table and map app leans on: single-source shortest paths with non-negative weights. Greedily settle the closest node, relax its edges, repeat. Return the distance to every node. Solve it in Python or TypeScript, with hidden tests.
+ Graphs Shortest Path Greedy 
+ Solve in Python / TypeScript → 
+
+ a-star-grid.solve 
+
+ Challenge N° 42 Medium 
+ A* Pathfinding on a Grid
+ The pathfinder inside games and robots: A* expands nodes by "cost so far + estimated cost to go", so the heuristic focuses the search toward the goal instead of spreading blindly. Return the shortest path length. Solve it in Python or TypeScript, with hidden tests.
+ Graphs Shortest Path Heuristics 
+ Solve in Python / TypeScript → 
+
+ course-schedule.solve 
+
+ Challenge N° 43 Medium 
+ Course Schedule (Cycle Detection)
+ Can you finish every course given its prerequisites? The classic "is this dependency graph acyclic?" check a build system runs. Detect a cycle with a topological sort. Solve it in Python or TypeScript, with hidden tests.
+ Graphs Topological Sort BFS 
+ Solve in Python / TypeScript → 
+
+ word-ladder.solve 
+
+ Challenge N° 44 Hard 
+ Word Ladder
+ Transform one word into another one letter at a time, every step a real word — a shortest path in a hidden graph, so a job for BFS. Return the shortest ladder length. Solve it in Python or TypeScript, with hidden tests.
+ Graphs BFS Strings 
+ Solve in Python / TypeScript → 
+
+ matrix-power.solve 
+
+ Challenge N° 45 Medium 
+ Matrix Exponentiation
+ Raise a matrix to the n-th power in O(log n) multiplies instead of n — the trick that computes the billionth Fibonacci number almost instantly. Fast exponentiation, lifted from numbers to matrices. Solve it in Python or TypeScript, with hidden tests.
+ Math Divide and Conquer Linear Algebra 
+ Solve in Python / TypeScript → 
+
+ skiplist-insert.solve 
+
+ Challenge N° 46 Hard 
+ Skip List Insert & Search
+ O(log n) search and insert from nothing but linked lists and express lanes — the structure behind Redis sorted sets. Here node heights are given, so it’s fully deterministic. Solve it in Python or TypeScript, with hidden tests.
+ Data Structures Linked List Search 
+ Solve in Python / TypeScript → 
+
+ reservoir-sample.solve 
+
+ Challenge N° 47 Medium 
+ Reservoir Sampling
+ Pick k items uniformly at random from a stream of unknown length — one pass, O(k) memory. Here the random draws are supplied, so the result is deterministic and testable. Solve it in Python or TypeScript, with hidden tests.
+ Sampling Streaming Probability 
+ Solve in Python / TypeScript → 
+
+ hll-cardinality.solve 
+
+ Challenge N° 48 Hard 
+ HyperLogLog Cardinality Estimator
+ Count how many distinct items a stream held — billions of them — using a few kilobytes, not a giant set. Turn "the longest run of leading zeros" into an estimate. Powers COUNT(DISTINCT) in Redis and BigQuery. Solve it in Python or TypeScript, with hidden tests.
+ Probabilistic Streaming Hashing 
+ Solve in Python / TypeScript → 
+
+ raft-election-step.solve 
+
+ Challenge N° 49 Easy 
+ Raft Leader Election (Majority)
+ The heartbeat of the Raft consensus algorithm: a candidate becomes leader only by winning a strict majority of the cluster — the rule that guarantees at most one leader per term. Decide an election round. Solve it in Python or TypeScript, with hidden tests.
+ Distributed Systems Consensus Raft 
+ Solve in Python / TypeScript → 
+
+ vector-clock-merge.solve 
+
+ Challenge N° 50 Easy 
+ Vector Clock Merge
+ Vector clocks let processes with no shared time agree on which event caused which. The key operation: on receive, take the element-wise max of the two clocks, then tick your own entry. Solve it in Python or TypeScript, with hidden tests.
+ Distributed Systems Causality Consistency 
+ Solve in Python / TypeScript → 
+
+ crdt-gcounter.solve 
+
+ Challenge N° 51 Easy 
+ CRDT: Grow-Only Counter
+ A counter many replicas increment independently, with no coordination, that always converges to the same total after syncing — a G-Counter, the simplest CRDT. Merge per-replica payloads by element-wise max. Solve it in Python or TypeScript, with hidden tests.
+ Distributed Systems CRDT Consistency 
+ Solve in Python / TypeScript → 
+
+ softmax-temperature.solve 
+
+ Challenge N° 52 Easy 
+ Softmax with Temperature
+ The dial that controls how "creative" a language model is: temperature scales the logits before the softmax — low sharpens toward greedy, high flattens toward uniform. Implement it, numerically stable. Solve it in Python or TypeScript, with hidden tests.
+ AI Sampling Math 
+ Solve in Python / TypeScript → 
+
+ semantic-chunker.solve 
+
+ Challenge N° 53 Easy 
+ Semantic Chunker (Token Budget)
+ Before you embed a document for retrieval, split it into chunks that fit a token budget — without slicing a sentence. The greedy packer fills each chunk with whole sentences until the next would overflow. Solve it in Python or TypeScript, with hidden tests.
+ AI RAG Chunking 
+ Solve in Python / TypeScript → 
+
+ speculative-accept.solve 
+
+ Challenge N° 54 Medium 
+ Speculative Decoding: Accept Step
+ Speculative decoding speeds up LLM inference: a small draft model proposes tokens, the big target model verifies them in one pass. The accept/reject rule guarantees the output matches the target’s own distribution. Implement it. Solve it in Python or TypeScript, with hidden tests.
+ AI Inference Sampling 
+ Solve in Python / TypeScript → 
+
+ kv-eviction.solve 
+
+ Challenge N° 55 Medium 
+ KV-Cache Eviction (Attention Sinks)
+ An LLM’s KV cache grows every token, so long chats must drop old entries without wrecking quality. StreamingLLM keeps the first few "attention sink" tokens plus a sliding window, evicting the middle. Compute the survivors. Solve it in Python or TypeScript, with hidden tests.
+ AI Inference Caching 
+ Solve in Python / TypeScript → 
+
+ constrained-decode.solve 
+
+ Challenge N° 56 Easy 
+ Constrained Decoding (Logit Masking)
+ How do you force an LLM to emit only valid JSON or a token your grammar allows? Mask the logits: set every disallowed token to −∞, then take the argmax over what remains. The backbone of structured output. Solve it in Python or TypeScript, with hidden tests.
+ AI Structured Output Decoding 
+ Solve in Python / TypeScript → 
+
+ webhook-signature-verify.solve 
+
+ Challenge N° 57 Medium 
+ Verify a Webhook Signature
+ Every real integration sends signed webhooks — and every FDE has to verify them. Recompute the signature over the payload, compare in constant time, and reject stale events to stop replay attacks. Solve it in Python or TypeScript, with hidden tests.
+ FDE Security Integrations 
+ Solve in Python / TypeScript → 
+
+ idempotency-key-handler.solve 
+
+ Challenge N° 58 Easy 
+ Idempotency Key Handler
+ Networks retry. A webhook fires twice; a payment is re-sent after a timeout. Without idempotency you double-charge or double-write. The fix: dedupe by a client-supplied key and always return the first result. Solve it in Python or TypeScript, with hidden tests.
+ FDE Integrations Reliability 
+ Solve in Python / TypeScript → 
+
+ csv-schema-mapper.solve 
+
+ Challenge N° 59 Medium 
+ CSV → Schema Mapper
+ Every customer hands you a messy export. Before it flows into your system, each row must be coerced to a schema — strings to ints, "true" to booleans — and the rows that don’t fit quarantined, not silently dropped. Solve it in Python or TypeScript, with hidden tests.
+ FDE Data Integrations 
+ Solve in Python / TypeScript → 
+
+ data-reconciliation-diff.solve 
+
+ Challenge N° 60 Medium 
+ Data Reconciliation Diff
+ The customer swears the migration worked. You reconcile: compare source records against what landed in the target, keyed by id, and report exactly what was added, removed, or changed. Solve it in Python or TypeScript, with hidden tests.
+ FDE Data Integrations 
+ Solve in Python / TypeScript → 
+
+ pii-redactor.solve 
+
+ Challenge N° 61 Medium 
+ PII Redactor
+ Before customer data touches a log line — or a third-party LLM — the personal bits have to go. Mask emails, SSNs, credit cards, and phone numbers with pattern matching, leaving the rest readable. Solve it in Python or TypeScript, with hidden tests.
+ FDE Security Compliance 
+ Solve in Python / TypeScript → 
+
+ config-validator.solve 
+
+ Challenge N° 62 Easy 
+ Config Validator
+ Half of "it doesn’t work at the customer" is a bad config — a missing key, a string where an int belongs, an env that isn’t allowed. Validate it up front and fail loudly with a clear list instead of crashing three layers deep. Solve it in Python or TypeScript, with hidden tests.
+ FDE Reliability Integrations 
+ Solve in Python / TypeScript → 
+
+ api-pagination-collector.solve 
+
+ Challenge N° 63 Easy 
+ API Pagination Collector
+ The customer’s API returns 100 rows at a time behind a cursor. You need all of them. Follow the "next" pointer page by page until it runs out — the loop behind every "sync everything" integration. Solve it in Python or TypeScript, with hidden tests.
+ FDE Integrations APIs 
+ Solve in Python / TypeScript → 
+
+ backoff-jitter.solve 
+
+ Challenge N° 64 Medium 
+ Exponential Backoff with Full Jitter
+ When a customer’s API throws 503s, everyone retrying on the same doubling schedule stampedes it in sync. Full jitter spreads the retries randomly across the window so the herd disperses. Compute the delay schedule. Solve it in Python or TypeScript, with hidden tests.
+ FDE Reliability Integrations 
+ Solve in Python / TypeScript → 
+
+ write-a-verifier.solve 
+
+ Challenge N° 65 Medium 
+ Write a Verifier
+ In RL from verifiable rewards, the verifier IS the reward — and a gameable one is worse than none, because every false positive is a lie the model learns. Write a verifier a reward-hacking agent can’t fool: recompute the score from ground truth, demand exact task coverage, and compare types-intact. Solve it in Python or TypeScript, with hidden tests.
+ AI Engineering RLVR Verification 
+ Solve in Python / TypeScript → 
+
+ build-your-own-agent-loop.solve 
+
+ Challenge N° 66 Medium 
+ Build Your Own Agent Loop
+ Strip an "AI agent" of its mystique and what’s left is a loop: read the model’s next move — tool call or final answer — run the tool, feed the observation back, repeat until it answers or the step cap trips. Implement the whole ReAct inner loop as one pure function. Solve it in Python or TypeScript, with hidden tests.
+ AI Engineering Agents Loop Engineering 
+ Solve in Python / TypeScript → 
+
+ spot-the-bug-in-ai-code.solve 
+
+ Challenge N° 67 Easy 
+ Spot the Bug in AI Code
+ An assistant wrote a chat-history trimmer that looks right, passes the obvious case, and silently drops the system prompt the moment the conversation gets long. Reviewing AI code means catching exactly this: confident, plausible, wrong on the case that matters. Find the bug and fix it. Solve it in Python or TypeScript, with hidden tests.
+ AI Engineering Code Review Debugging 
+ Solve in Python / TypeScript → 
+
+ code-comprehension-rpn.solve 
+
+ Challenge N° 68 Medium 
+ Read the Codebase, Fix the Bug
+ The skill an AI can’t fake for you: drop into unfamiliar code, trace how the pieces call each other, and fix the one that’s wrong without breaking the rest. A reverse-Polish calculator spread across three functions gets subtraction and division backwards — read the operand flow, then fix it at the source. Solve it in Python or TypeScript, with hidden tests.
+ AI Engineering Code Review Debugging 
+ Solve in Python / TypeScript → 
+
+ legacy-etl-repair.solve 
+
+ Challenge N° 69 Medium 
+ Re-Engineer a Legacy ETL
+ You inherit an aggregation nobody can explain and the totals are wrong. Three planted defects — an exclude-list where the spec wants an include-list, a dedupe key missing a field, and pre-seeded customers that should never appear. The FDE re-engineering round. Solve it in Python or TypeScript, with hidden tests.
+ FDE Interview Data 
+ Solve in Python / TypeScript → 
+
+ infection-spread-repair.solve 
+
+ Challenge N° 70 Medium 
+ Repair the Spread Traversal
+ Inherited code computes how far something spreads through a contact graph, and the answers are wrong in a way that is invisible on small inputs. A one-way adjacency map, a frontier with no dedupe, and a seen-set updated one step too late. Solve it in Python or TypeScript, with hidden tests.
+ FDE Interview Graphs 
+ Solve in Python / TypeScript → 
+
+ lru-cache-evolution.solve 
+
+ Challenge N° 71 Medium 
+ LRU Cache, Constraint by Constraint
+ The incremental-coding round, packaged: a cache that becomes bounded, then least-recently-used, then instrumented — each stage invalidating the shape of the last. Tests whether your first version can absorb the next requirement. Solve it in Python or TypeScript, with hidden tests.
+ FDE Interview Data Structures 
+ Solve in Python / TypeScript → 
+
+ deep-clone-escalation.solve 
+
+ Challenge N° 72 Medium 
+ Deep Clone, Constraint by Constraint
+ The incremental round on a problem where stage three genuinely breaks the obvious design: copy an object, then nested structures, then one containing a cycle, then one where two keys must still share the same clone. A visited set stops the crash and fails the last stage. Solve it in Python or TypeScript, with hidden tests.
+ FDE Interview Data Structures 
+ Solve in Python / TypeScript → 
+
+ rate-limiter-escalation.solve 
+
+ Challenge N° 73 Medium 
+ Rate Limiter, Constraint by Constraint
+ A third incremental round, where stage two invalidates stage one outright: a fixed-window counter becomes a sliding window, then per-key, then gains a burst allowance. Tests whether you can say “that counter has to go” calmly and refactor. Solve it in Python or TypeScript, with hidden tests.
+ FDE Interview Reliability 
+ Solve in Python / TypeScript → 
+
+ erp-crm-reconciliation.solve 
+
+ Challenge N° 74 Medium 
+ Reconcile Two Systems That Disagree
+ The customer is certain the ERP and the CRM agree; they have never checked. Build the reconciliation that produces a report someone can act on — normalised matching, per-field discrepancies, missing on each side, and duplicate keys reported rather than silently dropped. Solve it in Python or TypeScript, with hidden tests.
+ FDE Data Integration 
+ Solve in Python / TypeScript → 
+
+ flaky-api-harvester.solve 
+
+ Challenge N° 75 Medium 
+ Harvest a Flaky Paginated API
+ The vendor API is paginated, occasionally 500s, rate-limits without documenting it, and returns overlapping pages when the data moves under you. Collect everything, retry what deserves retrying, deduplicate, and return a partial result with the failures recorded rather than an exception. Solve it in Python or TypeScript, with hidden tests.
+ FDE Data Reliability 
+ Solve in Python / TypeScript → 
+
+ Coding challenges — frequently asked questions
+ What are these coding challenges? Each challenge is a classic interview-style problem you solve in your browser. You get a stub, a problem statement with examples, and hidden tests. Write your solution in Python or TypeScript, hit Run, and the tests tell you instantly whether it works — no account, no setup, nothing to install.
+ How does the code actually run with no server? Entirely in your browser. Python runs as real CPython compiled to WebAssembly (Pyodide); TypeScript is transpiled on the fly. The site is a static site with no backend, so your code never leaves your machine.
+ Can I see the solution if I get stuck? Yes. Every challenge has hints and a one-click "Reveal solution" button that drops a clean, commented reference implementation into the editor. The goal is to build intuition — struggle first, then compare your approach with the canonical one.
+ Do these help with coding interviews? Yes. The challenges target the array, string, hash-map, stack and two-pointer patterns that show up constantly in technical screens. Solving them by hand — then checking against hidden tests — is far more durable practice than reading solutions. Many also cross-link to an animated visualizer so you can see the underlying algorithm work.
+ Are the challenges free? Completely free, with no sign-up. Your solved progress is saved locally in your browser so the catalog remembers what you have finished.
+
+ Vibe Engines — free, interactive learning for engineers, PMs, and everyone building with AI. Built in the open by Saurabh Singh.
+ GitHub X YouTube LinkedIn 
+ © Vibe Engines · vibeengines.com 
+ Home FDE Academy Learn Topics Handbooks Roadmaps System Design AI Systems Algorithms Challenges Labs Papers Tools Glossary Cheatsheets Flashcards Search Newsletter Dashboard Builder Profile For Engineers For Product Managers For Designers About Contact Privacy Terms Open for AI

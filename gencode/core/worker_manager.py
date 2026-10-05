@@ -1,11 +1,9 @@
-"""Session-scoped worker lifecycle for subagents."""
+"""Session-scoped asynchronous worker lifecycle."""
 
-import json
-import queue
-import threading
-import time
+import asyncio
 from dataclasses import dataclass, field
 
+from .worker_contracts import clean_scope, clean_type
 from .worker_execution import run_worker
 from .worker_runtime import build_child_runtime
 from .workspace import now
@@ -18,7 +16,7 @@ class WorkerTask:
     subagent_type: str
     write_scope: tuple[str, ...]
     runtime: object
-    thread: threading.Thread | None = None
+    task: asyncio.Task | None = None
     stop_requested: bool = False
     state: dict = field(default_factory=dict)
 
@@ -28,39 +26,55 @@ class WorkerManager:
         self.runtime = runtime
         self.runtime.session.setdefault("workers", {"next_id": 1, "items": []})
         self._tasks = {}
-        self._lock = threading.Lock()
-        self._notifications = queue.Queue()
+        self._notifications = asyncio.Queue()
+        self._events = asyncio.Queue()
+        self._semaphore = asyncio.Semaphore(runtime.max_worker_concurrency)
+        self._bound_loop = None
 
     @property
     def state(self):
         return self.runtime.session.setdefault("workers", {"next_id": 1, "items": []})
 
-    def spawn(self, description, prompt, subagent_type="worker", write_scope=None):
-        subagent_type = _clean_type(subagent_type)
+    def bind_loop(self, loop):
+        if self._bound_loop is loop:
+            return
+        if self._bound_loop is not None:
+            self._notifications = asyncio.Queue()
+            self._events = asyncio.Queue()
+            self._semaphore = asyncio.Semaphore(self.runtime.max_worker_concurrency)
+        self._bound_loop = loop
+        for task in self._tasks.values():
+            if task.task is not None and task.task.done():
+                task.task = None
+            task.runtime._bind_async_loop(loop)
+            task.runtime.workspace_write_lock = self.runtime.workspace_write_lock
+
+    async def spawn(self, description, prompt, subagent_type="worker", write_scope=None):
+        subagent_type = clean_type(subagent_type)
         if self.runtime.runtime_mode == "plan" and subagent_type != "Explore":
             raise ValueError("plan mode only allows Explore agents")
         task = self._new_task(description, subagent_type, write_scope)
         self._tasks[task.id] = task
-        if self._can_run_background():
-            self._start_background(task, prompt, action="spawn")
-            return self._public_payload(task, status="started")
-        run_worker(self, task, prompt, action="spawn")
-        return self._public_payload(task)
+        if getattr(self.runtime, "model_client_factory", None) is None:
+            await run_worker(self, task, prompt, action="spawn")
+            return self._public_payload(task)
+        task.task = asyncio.create_task(run_worker(self, task, prompt, action="spawn"))
+        return self._public_payload(task, status="started")
 
-    def continue_task(self, task_id, message):
+    async def continue_task(self, task_id, message):
         task = self._get_active_task(task_id)
         item = self._get_item(task_id)
         if item.get("status") in {"running", "stopping"}:
             raise ValueError(f"worker is running: {task_id}")
         if self.runtime.runtime_mode == "plan" and task.subagent_type != "Explore":
             raise ValueError("plan mode only allows Explore agents")
-        if self._can_run_background():
-            self._start_background(task, message, action="continue")
-            return self._public_payload(task, status="started")
-        run_worker(self, task, message, action="continue")
-        return self._public_payload(task)
+        if getattr(self.runtime, "model_client_factory", None) is None:
+            await run_worker(self, task, message, action="continue")
+            return self._public_payload(task)
+        task.task = asyncio.create_task(run_worker(self, task, message, action="continue"))
+        return self._public_payload(task, status="started")
 
-    def stop_task(self, task_id):
+    async def stop_task(self, task_id):
         item = self._get_item(task_id)
         if item["status"] == "running":
             task = self._tasks.get(str(task_id))
@@ -69,7 +83,8 @@ class WorkerManager:
             item["status"] = "stopping"
             item["updated_at"] = now()
             self.runtime.session_event_bus.emit(
-                "worker_stop_requested", {"worker_id": item["id"], "status": "stopping"}
+                "worker_stop_requested",
+                {"worker_id": item["id"], "status": "stopping"},
             )
             self._save()
         return {
@@ -78,29 +93,30 @@ class WorkerManager:
             "description": item["description"],
         }
 
-    def shutdown(self, timeout=2.0):
+    async def wait_idle(self):
+        tasks = [task.task for task in self._tasks.values() if task.task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def shutdown_async(self):
         tasks = list(self._tasks.values())
+        active = []
         for task in tasks:
             item = self._get_item(task.id)
-            if item.get("status") in {"running", "stopping"}:
+            if item.get("status") in {"running", "stopping", "idle"}:
                 self._request_stop(task)
-                with self._lock:
-                    item["status"] = "stopping"
-                    item["updated_at"] = now()
+                item["status"] = "stopping"
+                item["updated_at"] = now()
+                if task.task is not None:
+                    active.append(task.task)
                 self.runtime.session_event_bus.emit(
                     "worker_stop_requested",
                     {"worker_id": item["id"], "status": "stopping"},
                 )
         if tasks:
             self._save()
-        deadline = time.monotonic() + float(timeout)
-        for task in tasks:
-            thread = task.thread
-            if thread is None or not thread.is_alive():
-                continue
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining:
-                thread.join(remaining)
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
         return {"stopped": sum(1 for task in tasks if task.stop_requested)}
 
     def to_dict(self):
@@ -110,11 +126,11 @@ class WorkerManager:
         }
 
     def _new_task(self, description, subagent_type, write_scope):
-        with self._lock:
-            worker_id = f"agent_{int(self.state.get('next_id', 1))}"
-            self.state["next_id"] = int(self.state.get("next_id", 1)) + 1
-        scope = tuple(_clean_scope(write_scope))
+        worker_id = f"agent_{int(self.state.get('next_id', 1))}"
+        self.state["next_id"] = int(self.state.get("next_id", 1)) + 1
+        scope = tuple(clean_scope(write_scope))
         child = build_child_runtime(self.runtime, subagent_type, scope)
+        child.workspace_write_lock = self.runtime.workspace_write_lock
         item = {
             "id": worker_id,
             "description": str(description or "").strip() or "Worker task",
@@ -129,47 +145,43 @@ class WorkerManager:
             "created_at": now(),
             "updated_at": now(),
         }
-        with self._lock:
-            self.state.setdefault("items", []).append(item)
-            self._save()
+        self.state.setdefault("items", []).append(item)
+        self._save()
         return WorkerTask(worker_id, item["description"], subagent_type, scope, child)
-
-    def _can_run_background(self):
-        return getattr(self.runtime, "model_client_factory", None) is not None
-
-    def _start_background(self, task, prompt, action):
-        thread = threading.Thread(
-            target=run_worker,
-            args=(self, task, prompt, action),
-            daemon=True,
-            name=f"gencode-worker-{task.id}",
-        )
-        task.thread = thread
-        thread.start()
 
     def _request_stop(self, task):
         task.stop_requested = True
-        abort = getattr(task.runtime, "abort_current_turn", None)
-        if callable(abort):
-            abort()
+        cancel = getattr(task.runtime, "cancel_current_turn", None)
+        if callable(cancel):
+            cancel()
 
     def drain_notifications(self):
         drained = []
         while True:
             try:
                 task_id, notification = self._notifications.get_nowait()
-            except queue.Empty:
+            except asyncio.QueueEmpty:
                 break
             item = self._get_item(task_id)
-            with self._lock:
-                if item.get("notification_drained"):
-                    continue
-                item["notification_drained"] = True
-                item["updated_at"] = now()
+            if item.get("notification_drained"):
+                continue
+            item["notification_drained"] = True
+            item["updated_at"] = now()
             drained.append(notification)
         if drained:
             self._save()
         return drained
+
+    def drain_events(self):
+        events = []
+        while True:
+            try:
+                events.append(self._events.get_nowait())
+            except asyncio.QueueEmpty:
+                return events
+
+    async def next_event(self):
+        return await self._events.get()
 
     def _get_active_task(self, task_id):
         task = self._tasks.get(str(task_id))
@@ -195,24 +207,3 @@ class WorkerManager:
         self.runtime.session_path = self.runtime.session_store.save(
             self.runtime.session
         )
-
-
-def _clean_type(value):
-    subagent_type = str(value or "worker").strip()
-    if subagent_type not in {"worker", "Explore"}:
-        raise ValueError("subagent_type must be worker or Explore")
-    return subagent_type
-
-
-def _clean_scope(value):
-    if value is None:
-        return []
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list):
-        raise ValueError("write_scope must be a list of workspace paths")
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def dumps_payload(payload):
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)

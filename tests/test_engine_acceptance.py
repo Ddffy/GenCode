@@ -4,9 +4,11 @@ import json
 import subprocess
 import sys
 
-from gencode.testing import ScriptedModelClient
+from conftest import collect_events
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.providers import ProviderError
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs, **kwargs):
@@ -39,14 +41,16 @@ def test_engine_streams_a_real_session_with_tool_artifacts(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("create the result file"))
+    events = collect_events(agent.engine.run_turn("create the result file"))
 
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
         "model_parsed",
         "tool_call",
         "tool_result",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -57,12 +61,12 @@ def test_engine_streams_a_real_session_with_tool_artifacts(tmp_path):
 
     persisted_events = read_jsonl(agent.session_event_bus.path)
     assert [event["event"] for event in persisted_events][-7:] == [
-        "tool_finished",
-        "context_orchestrator_decision",
         "context_usage_recorded",
         "model_requested",
+        "text_delta",
         "model_parsed",
         "assistant_message",
+        "final",
         "turn_finished",
     ]
 
@@ -75,7 +79,7 @@ def test_engine_streams_a_real_session_with_tool_artifacts(tmp_path):
 def test_engine_reports_context_budget_summary_from_prompt_metadata(tmp_path):
     agent = build_agent(tmp_path, ["<final>Done.</final>"])
 
-    list(agent.engine.run_turn("summarize context usage"))
+    collect_events(agent.engine.run_turn("summarize context usage"))
 
     report = json.loads(
         (agent.current_run_dir / "report.json").read_text(encoding="utf-8")
@@ -123,7 +127,7 @@ def test_engine_records_provider_error_as_failed_run(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("call a rate limited provider"))
+    events = collect_events(agent.engine.run_turn("call a rate limited provider"))
 
     assert events[-2]["type"] == "stop"
     assert "rate_limited" in events[-2]["content"]
@@ -160,7 +164,7 @@ def test_worker_notification_drained_during_turn_is_streamed(tmp_path):
         max_steps=3,
     )
 
-    events = list(agent.engine.run_turn("delegate and continue"))
+    events = collect_events(agent.engine.run_turn("delegate and continue"))
 
     notifications = [
         event for event in events if event["type"] == "worker_notification"
@@ -181,7 +185,7 @@ def test_verification_signal_passes_after_workspace_verification(tmp_path):
         max_steps=3,
     )
 
-    events = list(agent.engine.run_turn("write and verify python code"))
+    events = collect_events(agent.engine.run_turn("write and verify python code"))
 
     assert events[-2]["content"] == "Verified."
     report = json.loads(

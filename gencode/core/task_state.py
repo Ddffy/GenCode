@@ -46,11 +46,12 @@ class TaskState:
     evidence_summaries: dict = field(default_factory=dict)
     active_spec_ids: list = field(default_factory=list)
     knowledge_selections: dict = field(default_factory=dict)
+    event_log_degraded: bool = False
+    event_log_gap: dict = field(default_factory=dict)
 
     @classmethod
     def create(cls, task_id, user_request, run_id=""):
-        if not run_id:
-            run_id = "run_" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
+        run_id = run_id or f"run_{datetime.now().astimezone():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
         return cls(run_id=run_id, task_id=task_id, user_request=user_request)
 
     @classmethod
@@ -75,6 +76,8 @@ class TaskState:
             evidence_summaries=dict(data.get("evidence_summaries", {}) or {}),
             active_spec_ids=list(data.get("active_spec_ids", [])),
             knowledge_selections=dict(data.get("knowledge_selections", {}) or {}),
+            event_log_degraded=bool(data.get("event_log_degraded", False)),
+            event_log_gap=dict(data.get("event_log_gap", {}) or {}),
         )
 
     def record_attempt(self):
@@ -132,4 +135,6 @@ class TaskState:
             "evidence_summaries": dict(self.evidence_summaries),
             "active_spec_ids": list(self.active_spec_ids),
             "knowledge_selections": dict(self.knowledge_selections),
+            "event_log_degraded": self.event_log_degraded,
+            "event_log_gap": dict(self.event_log_gap),
         }

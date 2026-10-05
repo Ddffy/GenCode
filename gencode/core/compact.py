@@ -2,8 +2,12 @@
 
 from dataclasses import asdict, dataclass
 
-from .context_handoff import HandoffAdapter, render_delta_for_handoff, render_handoff_summary
 from .compact_summary import summarize_compact_items
+from .context_handoff import (
+    HandoffAdapter,
+    render_delta_for_handoff,
+    render_handoff_summary,
+)
 from .context_usage import estimate_tokens
 from .workspace import now
 
@@ -99,6 +103,15 @@ class CompactManager:
         if self.agent.current_task_state:
             self.agent.emit_trace(self.agent.current_task_state, "compaction_finished", summary)
         return summary
+
+    async def compact_async(
+        self, trigger="manual", keep_recent_turns=2, summary_mode="deterministic"
+    ):
+        from .compact_async import compact_async
+
+        return await compact_async(
+            self, trigger, keep_recent_turns, summary_mode
+        )
 
     @staticmethod
     def _group(history):

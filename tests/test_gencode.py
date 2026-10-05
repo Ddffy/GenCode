@@ -1,16 +1,18 @@
-import os
 import io
 import json
+import os
 import subprocess
 import sys
 import urllib.error
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
+
+import pytest
+from conftest import run_tool
 
 import gencode as gencode_pkg
 import gencode.providers as providers_pkg
-import pytest
-from gencode.testing import ScriptedModelClient
 from gencode import (
     AnthropicCompatibleModelClient,
     GenCode,
@@ -20,6 +22,7 @@ from gencode import (
     build_welcome,
 )
 from gencode.providers import ProviderError
+from gencode.testing import ScriptedModelClient
 
 
 def build_workspace(tmp_path):
@@ -216,8 +219,8 @@ def test_patch_file_replaces_exact_match(tmp_path):
     file_path.write_text("hello world\n", encoding="utf-8")
     agent = build_agent(tmp_path, [])
 
-    agent.run_tool("read_file", {"path": "sample.txt", "start": 1, "end": 1})
-    result = agent.run_tool(
+    run_tool(agent, "read_file", {"path": "sample.txt", "start": 1, "end": 1})
+    result = run_tool(agent,
         "patch_file",
         {
             "path": "sample.txt",
@@ -234,7 +237,7 @@ def test_invalid_risky_tool_does_not_prompt_for_approval(tmp_path):
     agent = build_agent(tmp_path, [], approval_policy="ask")
 
     with patch("builtins.input") as mock_input:
-        result = agent.run_tool("write_file", {})
+        result = run_tool(agent, "write_file", {})
 
     assert result.startswith("error: invalid arguments for write_file: 'path'")
     assert 'example: <tool name="write_file"' in result
@@ -247,7 +250,7 @@ def test_list_files_hides_internal_agent_state(tmp_path):
     (tmp_path / ".git").mkdir(exist_ok=True)
     (tmp_path / "hello.txt").write_text("hi\n", encoding="utf-8")
 
-    result = agent.run_tool("list_files", {})
+    result = run_tool(agent, "list_files", {})
 
     assert ".gencode" not in result
     assert ".git" not in result
@@ -260,7 +263,7 @@ def test_list_files_shows_one_level_child_preview(tmp_path):
     nested.mkdir(parents=True)
     (nested / "deployment_guide.md").write_text("docs\n", encoding="utf-8")
 
-    result = agent.run_tool("list_files", {"path": "fixtures"})
+    result = run_tool(agent, "list_files", {"path": "fixtures"})
 
     assert "[D] fixtures/db" in result
     assert "  [F] fixtures/db/deployment_guide.md" in result
@@ -271,9 +274,9 @@ def test_repeated_identical_tool_call_is_rejected(tmp_path):
     agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "1"})
     agent.record({"role": "tool", "name": "list_files", "args": {}, "content": "(empty)", "created_at": "2"})
 
-    result = agent.run_tool("list_files", {})
+    result = run_tool(agent, "list_files", {})
 
-    assert result == "error: repeated identical tool call for list_files; choose a different tool or return a final answer"
+    assert result == "error: repeated_identical_call for list_files; use the existing evidence, search for an unseen detail, or return a final answer"
 
 
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
@@ -300,7 +303,7 @@ def test_openai_compatible_client_posts_expected_responses_payload():
     captured = {}
 
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -359,7 +362,7 @@ def test_openai_compatible_client_sends_prompt_cache_fields_and_records_usage():
     captured = {}
 
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -417,7 +420,7 @@ def test_openai_compatible_client_retries_rate_limit_and_records_retry_metadata(
     calls = {"count": 0}
 
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -460,7 +463,7 @@ def test_openai_compatible_client_retries_rate_limit_and_records_retry_metadata(
 
 def test_openai_compatible_client_classifies_invalid_json_provider_failure():
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -505,7 +508,7 @@ def test_provider_error_metadata_sanitizes_url_credentials():
 
 def test_provider_success_metadata_sanitizes_url_credentials():
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -537,7 +540,7 @@ def test_provider_url_sanitizer_handles_invalid_ports_and_ipv6():
 
 def test_openai_compatible_client_extracts_text_from_event_stream():
     class FakeResponse:
-        headers = {"Content-Type": "text/event-stream"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/event-stream"}
 
         def __enter__(self):
             return self
@@ -547,10 +550,10 @@ def test_openai_compatible_client_extracts_text_from_event_stream():
 
         def read(self):
             return (
-                'data: {"type":"response.created","response":{"id":"resp_1","output":[]}}\n'
-                'data: {"type":"response.completed","response":{"output":[{"content":[{"text":"<final>stream ok</final>"}]}]}}\n'
-                "data: [DONE]\n"
-            ).encode("utf-8")
+                b'data: {"type":"response.created","response":{"id":"resp_1","output":[]}}\n'
+                b'data: {"type":"response.completed","response":{"output":[{"content":[{"text":"<final>stream ok</final>"}]}]}}\n'
+                b"data: [DONE]\n"
+            )
 
     client = OpenAICompatibleModelClient(
         model="right.codes/codex-mini",
@@ -568,7 +571,7 @@ def test_openai_compatible_client_extracts_text_from_event_stream():
 
 def test_openai_compatible_client_extracts_text_from_event_stream_deltas():
     class FakeResponse:
-        headers = {"Content-Type": "text/event-stream"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "text/event-stream"}
 
         def __enter__(self):
             return self
@@ -578,14 +581,14 @@ def test_openai_compatible_client_extracts_text_from_event_stream_deltas():
 
         def read(self):
             return (
-                'event: response.output_text.delta\n'
-                'data: {"type":"response.output_text.delta","delta":"<final>"}\n'
-                'event: response.output_text.delta\n'
-                'data: {"type":"response.output_text.delta","delta":"OK"}\n'
-                'event: response.output_text.done\n'
-                'data: {"type":"response.output_text.done","text":"<final>OK</final>"}\n'
-                "data: [DONE]\n"
-            ).encode("utf-8")
+                b'event: response.output_text.delta\n'
+                b'data: {"type":"response.output_text.delta","delta":"<final>"}\n'
+                b'event: response.output_text.delta\n'
+                b'data: {"type":"response.output_text.delta","delta":"OK"}\n'
+                b'event: response.output_text.done\n'
+                b'data: {"type":"response.output_text.done","text":"<final>OK</final>"}\n'
+                b"data: [DONE]\n"
+            )
 
     client = OpenAICompatibleModelClient(
         model="right.codes/codex-mini",
@@ -605,7 +608,7 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
     captured = {}
 
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -670,7 +673,7 @@ def test_anthropic_compatible_client_posts_expected_messages_payload():
 
 def test_anthropic_compatible_client_extracts_first_text_block():
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -704,7 +707,7 @@ def test_anthropic_compatible_client_extracts_first_text_block():
 
 def test_anthropic_compatible_client_records_usage_metadata():
     class FakeResponse:
-        headers = {"Content-Type": "application/json"}
+        headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
         def __enter__(self):
             return self
@@ -772,10 +775,9 @@ def test_build_agent_uses_openai_provider_and_model_override(tmp_path):
             "OPENAI_MODEL": "env-model",
         },
         clear=False,
-    ):
-        with patch("gencode.cli.OpenAICompatibleModelClient") as mock_openai:
-            fake_client = mock_openai.return_value
-            agent = gencode_pkg.build_agent(args)
+    ), patch("gencode.cli.OpenAICompatibleModelClient") as mock_openai:
+        fake_client = mock_openai.return_value
+        agent = gencode_pkg.build_agent(args)
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "override-model"
@@ -829,13 +831,12 @@ def test_build_agent_uses_anthropic_provider_and_openai_key_fallback(tmp_path):
             "OPENAI_API_KEY": "sk-openai-fallback",
         },
         clear=True,
-    ):
-        with patch(
-            "gencode.cli.OpenAICompatibleModelClient",
-            side_effect=AssertionError("openai client should not be used"),
-        ), patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            fake_client = mock_anthropic.return_value
-            agent = gencode_pkg.build_agent(args)
+    ), patch(
+        "gencode.cli.OpenAICompatibleModelClient",
+        side_effect=AssertionError("openai client should not be used"),
+    ), patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        fake_client = mock_anthropic.return_value
+        agent = gencode_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "claude-sonnet-4-5-20250929"
@@ -861,7 +862,7 @@ def test_build_agent_uses_anthropic_default_model_when_env_is_missing(tmp_path):
 
 def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
     (tmp_path / ".env").write_text(
-        "\n".join(
+        "\n".join(  # noqa: FLY002
             [
                 "GENCODE_DEEPSEEK_API_BASE=https://api.deepseek.com/anthropic",
                 "GENCODE_DEEPSEEK_API_KEY=sk-project-deepseek",
@@ -895,13 +896,12 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
         os.environ,
         {"ANTHROPIC_API_KEY": "sk-anthropic", "OPENAI_API_KEY": "sk-openai"},
         clear=True,
-    ):
-        with patch(
-            "gencode.cli.OpenAICompatibleModelClient",
-            side_effect=AssertionError("openai client should not be used"),
-        ), patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            fake_client = mock_anthropic.return_value
-            agent = gencode_pkg.build_agent(args)
+    ), patch(
+        "gencode.cli.OpenAICompatibleModelClient",
+        side_effect=AssertionError("openai client should not be used"),
+    ), patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
+        fake_client = mock_anthropic.return_value
+        agent = gencode_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-flash"
@@ -912,7 +912,7 @@ def test_build_agent_uses_deepseek_provider_and_env_configuration(tmp_path):
 
 def test_build_agent_uses_provider_profile_protocol_from_project_toml(tmp_path):
     (tmp_path / ".gencode.toml").write_text(
-        "\n".join(
+        "\n".join(  # noqa: FLY002
             [
                 'provider = "deepseek"',
                 "",
@@ -928,13 +928,16 @@ def test_build_agent_uses_provider_profile_protocol_from_project_toml(tmp_path):
     )
     args = gencode_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path)])
 
-    with patch.dict(os.environ, {"GENCODE_DEEPSEEK_API_KEY": "sk-legacy-env"}, clear=True):
-        with patch(
+    with (
+        patch.dict(os.environ, {"GENCODE_DEEPSEEK_API_KEY": "sk-legacy-env"}, clear=True),
+        patch(
             "gencode.cli.OpenAICompatibleModelClient",
             side_effect=AssertionError("openai client should not be used"),
-        ), patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            fake_client = mock_anthropic.return_value
-            agent = gencode_pkg.build_agent(args)
+        ),
+        patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic,
+    ):
+        fake_client = mock_anthropic.return_value
+        agent = gencode_pkg.build_agent(args)
 
     mock_anthropic.assert_called_once()
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-flash"
@@ -946,9 +949,11 @@ def test_build_agent_uses_provider_profile_protocol_from_project_toml(tmp_path):
 def test_build_agent_uses_deepseek_default_model_when_env_is_missing(tmp_path):
     args = gencode_pkg.build_arg_parser().parse_args(["--cwd", str(tmp_path), "--provider", "deepseek"])
 
-    with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=True):
-        with patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic:
-            gencode_pkg.build_agent(args)
+    with (
+        patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=True),
+        patch("gencode.cli.AnthropicCompatibleModelClient") as mock_anthropic,
+    ):
+        gencode_pkg.build_agent(args)
 
     assert mock_anthropic.call_args.kwargs["model"] == "deepseek-v4-flash"
     assert mock_anthropic.call_args.kwargs["base_url"] == "https://api.deepseek.com/anthropic"
@@ -964,10 +969,9 @@ def test_build_agent_uses_openai_provider_by_default(tmp_path):
             "OPENAI_API_KEY": "sk-test",
         },
         clear=False,
-    ):
-        with patch("gencode.cli.OpenAICompatibleModelClient") as mock_openai:
-            fake_client = mock_openai.return_value
-            agent = gencode_pkg.build_agent(args)
+    ), patch("gencode.cli.OpenAICompatibleModelClient") as mock_openai:
+        fake_client = mock_openai.return_value
+        agent = gencode_pkg.build_agent(args)
 
     mock_openai.assert_called_once()
     assert mock_openai.call_args.kwargs["model"] == "gpt-5.4"
@@ -1253,7 +1257,7 @@ def test_resume_invalidates_stale_file_summaries_and_marks_partial_stale(tmp_pat
 def test_run_shell_nonzero_with_workspace_change_is_recorded_as_partial_success(tmp_path):
     agent = build_agent(tmp_path, [])
 
-    result = agent.run_tool(
+    result = run_tool(agent,
         "run_shell",
         {
             "command": "printf 'changed\\n' > README.md && exit 1",
@@ -1528,7 +1532,7 @@ def test_resume_records_runtime_identity_mismatch_fields_in_metadata_and_trace(t
 def test_partial_success_creates_process_note_for_exploration_history(tmp_path):
     agent = build_agent(tmp_path, [])
 
-    agent.run_tool(
+    run_tool(agent,
         "run_shell",
         {
             "command": "printf 'changed\\n' > README.md && exit 1",
@@ -1552,9 +1556,11 @@ def test_final_labels_do_not_write_to_legacy_durable_memory(tmp_path):
     agent = build_agent(
         tmp_path,
         [
-            "<final>Project convention: Use constrained tools instead of guessing.\n"
-            "Project convention: Preserve local agent state under .gencode/.\n"
-            "Decision: Keep durable memory topic-based and lightweight.</final>",
+            (
+                "<final>Project convention: Use constrained tools instead of guessing.\n"
+                "Project convention: Preserve local agent state under .gencode/.\n"
+                "Decision: Keep durable memory topic-based and lightweight.</final>"
+            ),
         ],
     )
 
@@ -1716,9 +1722,11 @@ def test_final_answer_bullets_are_not_legacy_memory_intake(tmp_path):
     agent = build_agent(
         tmp_path,
         [
-            "<final>Promoted facts:\n"
-            "- Project convention: Keep manual black-box artifacts under artifacts/.\n"
-            "- Decision: Use CLI-level testing before implementation claims.</final>",
+            (
+                "<final>Promoted facts:\n"
+                "- Project convention: Keep manual black-box artifacts under artifacts/.\n"
+                "- Decision: Use CLI-level testing before implementation claims.</final>"
+            ),
         ],
     )
 
@@ -1732,8 +1740,10 @@ def test_chinese_final_answer_labels_are_not_legacy_memory_intake(tmp_path):
     agent = build_agent(
         tmp_path,
         [
-            "<final>项目约定：优先使用受约束工具，不要靠猜。\n"
-            "决策：持久记忆保持轻量、按 topic 管理。</final>",
+            (
+                "<final>项目约定：优先使用受约束工具，不要靠猜。\n"
+                "决策：持久记忆保持轻量、按 topic 管理。</final>"
+            ),
         ],
     )
 
@@ -1749,10 +1759,12 @@ def test_legacy_final_answer_classification_does_not_create_candidates(tmp_path)
     agent = build_agent(
         tmp_path,
         [
-            "<final>Project convention: Use constrained tools instead of guessing.\n"
-            "Dependency: API key is sk-live-secret-abc.\n"
-            "Decision: Current goal is fix flaky tests.\n"
-            "Dependency: stdout: FAIL test_one FAIL test_two FAIL test_three.</final>",
+            (
+                "<final>Project convention: Use constrained tools instead of guessing.\n"
+                "Dependency: API key is sk-live-secret-abc.\n"
+                "Decision: Current goal is fix flaky tests.\n"
+                "Dependency: stdout: FAIL test_one FAIL test_two FAIL test_three.</final>"
+            ),
         ],
     )
 
@@ -1893,6 +1905,7 @@ def test_module_execution_help_works():
         [sys.executable, "-m", "gencode", "--help"],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode == 0

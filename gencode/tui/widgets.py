@@ -10,7 +10,6 @@ from textual.widgets import Collapsible, Input, Markdown, Static
 
 from ..commands.slash import SlashCommand, suggest_commands
 
-
 GENCODE_MARK = [
     r"        /\___/\\",
     r"       (  o o  )",
@@ -151,12 +150,11 @@ class AssistantMessage(Static):
         yield Static("gencode", classes="message-label")
         yield Markdown(self.content)
 
-    def update_content(self, content: str) -> None:
+    def update_content(self, content: str):
         self.content = content
-        try:
-            self.query_one(Markdown).update(content)
-        except Exception:
-            pass
+        if self.is_mounted:
+            return self.query_one(Markdown).update(content)
+        return None
 
 
 class ToolCard(Static):
@@ -425,9 +423,11 @@ class StatusBar(Static):
 
     def update_agent(self, agent) -> None:
         model = getattr(agent.model_client, "model", "")
+        provider = getattr(agent.model_client, "provider", "")
         mode = getattr(agent, "runtime_mode", "default")
         session = str(agent.session.get("id", ""))[-10:]
-        self.agent_text = f"model {model or '-'} | mode {mode} | session {session}"
+        model_identity = f"{provider}/{model}" if provider and model else model
+        self.agent_text = f"model {model_identity or '-'} | mode {mode} | session {session}"
         self._render_status()
 
     def update_turns(self, count: int) -> None:
@@ -552,9 +552,10 @@ class InputBar(Static):
         self.input.focus()
 
     def set_busy(self, busy: bool) -> None:
-        self.input.disabled = bool(busy)
         self.input.placeholder = (
-            "gencode is working..." if busy else "Ask gencode or type /help"
+            "Enter steers; /queue <text> queues; /cancel stops"
+            if busy
+            else "Ask gencode or type /help"
         )
 
     def history_prev(self) -> None:

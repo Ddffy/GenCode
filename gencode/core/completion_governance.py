@@ -172,15 +172,6 @@ def _emit_terminal_artifacts(
             "run_duration_ms": duration_ms,
         },
     )
-    agent.session_event_bus.emit(
-        "turn_finished",
-        {
-            "run_id": task_state.run_id,
-            "status": task_state.status,
-            "stop_reason": task_state.stop_reason,
-            "duration_ms": duration_ms,
-        },
-    )
     agent.run_store.write_report(
         task_state, agent.redact_artifact(agent.build_report(task_state))
     )

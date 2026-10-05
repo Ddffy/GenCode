@@ -2,6 +2,8 @@
 
 import json
 
+from conftest import collect_events
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.core.task_state import TaskState
 from gencode.core.turn_transitions import emit_terminal_transition
@@ -39,14 +41,16 @@ def test_engine_records_loop_transitions_without_changing_stream(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("create the result file"))
+    events = collect_events(agent.engine.run_turn("create the result file"))
 
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
         "model_parsed",
         "tool_call",
         "tool_result",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -132,7 +136,7 @@ def test_engine_executes_multiple_tool_calls_from_one_model_response(tmp_path):
     agent = build_agent(
         tmp_path,
         [
-            "\n".join(
+            "\n".join(  # noqa: FLY002
                 [
                     '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":1}}</tool>',
                     '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -142,7 +146,7 @@ def test_engine_executes_multiple_tool_calls_from_one_model_response(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("inspect the workspace"))
+    events = collect_events(agent.engine.run_turn("inspect the workspace"))
 
     assert [event["type"] for event in events if event["type"] == "tool_call"] == [
         "tool_call",
@@ -165,7 +169,7 @@ def test_multi_tool_transition_distinguishes_requested_and_executed_counts(tmp_p
     agent = build_agent(
         tmp_path,
         [
-            "\n".join(
+            "\n".join(  # noqa: FLY002
                 [
                     '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":1}}</tool>',
                     '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
@@ -176,7 +180,7 @@ def test_multi_tool_transition_distinguishes_requested_and_executed_counts(tmp_p
         max_steps=1,
     )
 
-    events = list(agent.engine.run_turn("inspect with too many tools"))
+    events = collect_events(agent.engine.run_turn("inspect with too many tools"))
 
     assert [event["type"] for event in events if event["type"] == "tool_call"] == [
         "tool_call"
@@ -207,7 +211,7 @@ def test_empty_response_provider_error_is_retried_once_before_failing(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("recover from provider empty response"))
+    events = collect_events(agent.engine.run_turn("recover from provider empty response"))
 
     assert events[-2]["content"] == "Recovered."
     persisted_events = read_jsonl(agent.session_event_bus.path)
@@ -223,7 +227,9 @@ def test_empty_response_provider_error_is_retried_once_before_failing(tmp_path):
     ]
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -240,13 +246,15 @@ def test_parse_retry_transition_preserves_stream_order(tmp_path):
         ],
     )
 
-    events = list(agent.engine.run_turn("recover from parse retry"))
+    events = collect_events(agent.engine.run_turn("recover from parse retry"))
 
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
         "model_parsed",
         "retry",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -267,7 +275,7 @@ def test_retry_limit_transition_is_terminal(tmp_path):
         max_steps=1,
     )
 
-    events = list(agent.engine.run_turn("hit retry limit"))
+    events = collect_events(agent.engine.run_turn("hit retry limit"))
 
     assert events[-1]["stop_reason"] == "retry_limit_reached"
     trace = read_jsonl(agent.current_run_dir / "trace.jsonl")
@@ -293,17 +301,20 @@ def test_plan_notice_transition_preserves_runtime_notice_stream_order(tmp_path):
     )
     agent.enter_plan_mode("v3")
 
-    events = list(agent.engine.run_turn("make a plan"))
+    events = collect_events(agent.engine.run_turn("make a plan"))
 
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
         "model_parsed",
         "runtime_notice",
+        "context_building",
         "model_requested",
         "model_parsed",
         "tool_call",
         "tool_result",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -328,7 +339,7 @@ def test_step_limit_triggers_graceful_summary_when_model_complies(tmp_path):
         max_steps=1,
     )
 
-    events = list(agent.engine.run_turn("trigger step limit"))
+    events = collect_events(agent.engine.run_turn("trigger step limit"))
 
     stop_event = next(e for e in events if e["type"] == "stop")
     assert "已经列出文件" in stop_event["content"]
@@ -346,7 +357,9 @@ def test_step_limit_falls_back_to_cold_message_when_summary_fails(tmp_path):
         max_steps=1,
     )
 
-    events = list(agent.engine.run_turn("trigger step limit"))
+    events = collect_events(agent.engine.run_turn("trigger step limit"))
 
     stop_event = next(e for e in events if e["type"] == "stop")
-    assert "Stopped after reaching the step limit" in stop_event["content"]
+    assert stop_event["content"] == (
+        "Stopped after reaching the tool-step budget without a final answer."
+    )

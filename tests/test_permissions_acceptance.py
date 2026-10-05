@@ -1,10 +1,12 @@
 import json
 
-from gencode.testing import ScriptedModelClient
+from conftest import run_tool
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.cli import handle_repl_command
 from gencode.core.permissions import PermissionDecision
 from gencode.features.sandbox.config import SandboxConfig
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):
@@ -46,7 +48,7 @@ def test_permission_checker_is_the_single_default_tool_gate(tmp_path):
         "approval_denied", security_event_type="approval_denied"
     )
 
-    result = agent.run_tool("run_shell", {"command": "echo hi", "timeout": 20})
+    result = run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 20})
 
     assert result == "error: approval denied for run_shell"
     assert agent._last_tool_result_metadata["tool_error_code"] == "approval_denied"
@@ -68,7 +70,7 @@ def test_run_shell_required_sandbox_fails_closed_after_permission(tmp_path):
     )
     agent.sandbox_runner.which = lambda name: None
 
-    result = agent.run_tool("run_shell", {"command": "echo hi", "timeout": 20})
+    result = run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 20})
 
     assert "sandbox required but unavailable" in result
     assert agent._last_tool_result_metadata["tool_error_code"] == "tool_failed"
@@ -83,7 +85,7 @@ def test_run_shell_best_effort_sandbox_degrades_and_keeps_permission_gate(tmp_pa
     )
     agent.sandbox_runner.which = lambda name: None
 
-    result = agent.run_tool("run_shell", {"command": "echo hi", "timeout": 20})
+    result = run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 20})
 
     assert "exit_code: 0" in result
     assert "hi" in result
@@ -110,7 +112,7 @@ def test_plan_mode_switches_tool_profile_and_allows_only_active_plan_file(tmp_pa
     assert agent.active_tool_profile.name == "plan"
     assert "run_shell" not in agent.active_tool_profile.allowed_tools
 
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "write_file", {"path": "src.py", "content": "print('no')\n"}
     )
     assert (
@@ -187,7 +189,7 @@ def test_plan_mode_does_not_allow_retargeting_active_plan_with_enter_tool(tmp_pa
 
     agent.enter_plan_mode("original")
 
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "enter_plan_mode", {"topic": "retarget", "path": "src.py"}
     )
 
@@ -198,7 +200,7 @@ def test_plan_mode_does_not_allow_retargeting_active_plan_with_enter_tool(tmp_pa
 def test_plan_mode_rejects_arbitrary_workspace_plan_path(tmp_path):
     agent = build_agent(tmp_path)
 
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "enter_plan_mode", {"topic": "retarget", "path": "src/auth.py"}
     )
 

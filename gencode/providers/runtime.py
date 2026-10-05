@@ -74,23 +74,27 @@ def model_client_from_config(config, args, *, timeout=None, client_classes=None)
     client_classes = client_classes or ProviderClientClasses()
     timeout = getattr(args, "openai_timeout", 300) if timeout is None else timeout
     if config.protocol == "openai":
-        return client_classes.openai(
+        client = client_classes.openai(
             model=config.model,
             base_url=config.base_url,
             api_key=config.api_key,
             temperature=args.temperature,
             timeout=timeout,
         )
-    if config.protocol == "anthropic":
-        return client_classes.anthropic(
+    elif config.protocol == "anthropic":
+        client = client_classes.anthropic(
             model=config.model,
             base_url=config.base_url,
             api_key=config.api_key,
             temperature=args.temperature,
             timeout=timeout,
         )
+    else:
+        raise ValueError(f"unknown provider protocol: {config.protocol}")
 
-    raise ValueError(f"unknown provider protocol: {config.protocol}")
+    client.provider = config.name
+    client.protocol = config.protocol
+    return client
 
 
 def _resolve_main_provider_config(args, provider=None, use_cli_overrides=True):

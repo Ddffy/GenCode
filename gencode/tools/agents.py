@@ -1,6 +1,6 @@
 """Coordinator subagent tool definitions."""
 
-from ..core.worker_manager import dumps_payload
+from ..core.worker_contracts import dumps_payload
 
 AGENT_TOOL_NAMES = {"agent", "send_message", "task_stop"}
 

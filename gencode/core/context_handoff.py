@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from ..providers.base import complete_model
-
 
 HANDOFF_PROMPT_TEMPLATE = """\
 You are a context compactor for a coding agent. Your job is to produce a structured
@@ -67,7 +67,7 @@ class HandoffSummary:
 class HandoffParser:
     """Parses structured markdown LLM output into a HandoffSummary."""
 
-    FIELD_BY_HEADER = {
+    FIELD_BY_HEADER: ClassVar[dict[str, str]] = {
         "goal": "goal",
         "constraints": "constraints",
         "files read": "files_read",
@@ -139,19 +139,25 @@ class HandoffAdapter:
         self.last_usage = None
 
     def generate(self, delta_text: str, prior_summary_text: str = "") -> HandoffSummary | None:
+        prompt = self._prompt(delta_text, prior_summary_text)
+        try:
+            result = complete_model(self.model_client, prompt, self.max_summary_tokens)
+        except Exception:  # noqa: BLE001 - deterministic compaction is the fallback
+            self.last_usage = None
+            return None
+        return self._parse_result(result)
+
+    @staticmethod
+    def _prompt(delta_text, prior_summary_text):
         prior_block = ""
         if str(prior_summary_text or "").strip():
             prior_block = "## Prior Summary (merge into your output)\n\n" + str(prior_summary_text).strip()
-        prompt = HANDOFF_PROMPT_TEMPLATE.format(
+        return HANDOFF_PROMPT_TEMPLATE.format(
             prior_summary_block=prior_block,
             delta_text=str(delta_text or ""),
         )
-        try:
-            result = complete_model(self.model_client, prompt, self.max_summary_tokens)
-        except Exception:
-            self.last_usage = None
-            return None
 
+    def _parse_result(self, result):
         self.last_usage = self._usage(result.metadata)
         summary = self.parser.parse(result.text)
         if not summary.goal or not summary.next_steps:

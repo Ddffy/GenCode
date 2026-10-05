@@ -13,11 +13,17 @@ INLINE_TOOL_OUTPUT_LIMIT = 1000
 INLINE_TOOL_OUTPUT_LIMITS = {
     "inspect_image": 12000,
 }
+READ_ONLY_QA_TOOL_OUTPUT_LIMITS = {
+    "read_file": 5000,
+    "search": 3000,
+}
 
 
 def prepare_tool_result_observation(agent, name, full_result):
     full_result = str(full_result)
     inline_limit = INLINE_TOOL_OUTPUT_LIMITS.get(name, INLINE_TOOL_OUTPUT_LIMIT)
+    if getattr(agent, "fast_read_only_qa", False):
+        inline_limit = READ_ONLY_QA_TOOL_OUTPUT_LIMITS.get(name, inline_limit)
     metadata = {
         "original_chars": len(full_result),
         "content_sha256": hashlib.sha256(full_result.encode("utf-8")).hexdigest(),

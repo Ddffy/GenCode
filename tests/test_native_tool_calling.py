@@ -1,11 +1,14 @@
 import json
+from typing import ClassVar
 from unittest.mock import patch
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.providers.base import ModelResult
-from gencode.providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from gencode.providers import (
+    AnthropicCompatibleModelClient,
+    OpenAICompatibleModelClient,
+)
+from gencode.providers.base import ModelResult, ModelStreamEvent
 from gencode.testing import NativeScriptedModelClient
-
 
 TOOL = {
     "name": "read_file",
@@ -19,7 +22,7 @@ TOOL = {
 
 
 class _Response:
-    headers = {"Content-Type": "application/json"}
+    headers: ClassVar[dict[str, str]] = {"Content-Type": "application/json"}
 
     def __enter__(self):
         return self
@@ -216,6 +219,15 @@ def test_engine_executes_native_call_and_accepts_plain_final_text(tmp_path):
                 metadata={"native_tool_calling": True},
             )
 
+        async def stream_result(self, prompt, max_new_tokens, tools=None, **kwargs):
+            result = self.complete_result(
+                prompt,
+                max_new_tokens,
+                tools=tools,
+                **kwargs,
+            )
+            yield ModelStreamEvent("completed", result=result)
+
     client = FakeNativeClient()
     agent = GenCode(
         model_client=client,
@@ -230,6 +242,60 @@ def test_engine_executes_native_call_and_accepts_plain_final_text(tmp_path):
         item.get("role") == "tool" and item.get("name") == "read_file"
         for item in agent.session["history"]
     )
+
+
+def test_native_final_without_tools_is_accepted_as_plain_text(tmp_path, monkeypatch):
+    from gencode.core import engine as engine_module
+
+    (tmp_path / "README.md").write_text("native path\n", encoding="utf-8")
+
+    class FakeNativeClient:
+        supports_native_tool_calling = True
+
+        def __init__(self):
+            self.calls = 0
+            self.tools_by_call = []
+            self.tokens_by_call = []
+
+        async def stream_messages(self, messages, max_new_tokens, tools=None, **kwargs):
+            del messages, kwargs
+            self.calls += 1
+            self.tools_by_call.append(tools)
+            self.tokens_by_call.append(max_new_tokens)
+            if self.calls == 1:
+                result = ModelResult(
+                    text="",
+                    metadata={"native_tool_calling": True, "native_message_mode": True},
+                    tool_calls=(
+                        {
+                            "id": "call_1",
+                            "name": "read_file",
+                            "args": {"path": "README.md", "start": 1, "end": 1},
+                        },
+                    ),
+                    stop_reason="tool_use",
+                )
+            else:
+                result = ModelResult(
+                    text="The README says native path.",
+                    metadata={"native_tool_calling": False, "native_message_mode": True},
+                )
+            yield ModelStreamEvent("completed", result=result)
+
+    monkeypatch.setattr(engine_module, "READ_ONLY_QA_EVIDENCE_STEP_BUDGET", 1)
+    client = FakeNativeClient()
+    agent = GenCode(
+        model_client=client,
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".gencode" / "sessions"),
+        approval_policy="auto",
+    )
+
+    assert agent.ask("怎么读取 README 的内容？") == "The README says native path."
+    assert client.calls == 2
+    assert client.tools_by_call[0]
+    assert client.tools_by_call[1] is None
+    assert client.tokens_by_call[1] == 1800
 
 
 def _multi_call_history(prepend):

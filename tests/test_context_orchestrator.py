@@ -1,6 +1,9 @@
+import asyncio
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.core.context_budget_summary import context_budget_summary
 from gencode.core.context_manager import ContextManager
+from gencode.providers.base import ModelResult, ModelStreamEvent
 from gencode.testing import ScriptedModelClient
 
 
@@ -97,6 +100,49 @@ Continue the large task.
     assert result.metadata["auto_compaction_summary"]["summary_mode"] == "llm"
     assert result.metadata["context_orchestrator"]["compact_call_usage"]["total_tokens"] == 100
     assert context_budget_summary(result.metadata)["compact_call_usage"]["provider"] == "openai"
+
+
+def test_async_orchestrator_uses_provider_stream_for_llm_compaction(tmp_path):
+    class AsyncOnlyHandoffClient:
+        context_window = 1000
+        supports_prompt_cache = False
+
+        def __init__(self):
+            self.last_completion_metadata = {
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            }
+            self.stream_calls = 0
+
+        def complete(self, *args, **kwargs):
+            raise AssertionError("async compaction must not call complete()")
+
+        async def stream_result(self, prompt, max_new_tokens, **kwargs):
+            del prompt, max_new_tokens, kwargs
+            self.stream_calls += 1
+            text = "## Goal\nContinue.\n\n## Next Steps\n- Verify.\n"
+            yield ModelStreamEvent("text_delta", text)
+            yield ModelStreamEvent("completed", result=ModelResult(text=text))
+
+    client = AsyncOnlyHandoffClient()
+    agent = GenCode(
+        model_client=client,
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".gencode" / "sessions"),
+        approval_policy="auto",
+        git_auto_commit=False,
+        git_auto_undo=False,
+    )
+    for index in range(5):
+        agent.record({"role": "user", "content": f"request {index} " + ("x" * 900)})
+        agent.record({"role": "assistant", "content": f"answer {index} " + ("y" * 900)})
+
+    snapshot = agent.context_orchestrator.snapshot("continue")
+    result = asyncio.run(agent.context_orchestrator.build_async(snapshot))
+
+    assert result.metadata["auto_compaction_summary"]["summary_mode"] == "llm"
+    assert client.stream_calls == 1
 
 
 def test_orchestrator_tier3_insufficient_delta_does_not_compact(tmp_path):

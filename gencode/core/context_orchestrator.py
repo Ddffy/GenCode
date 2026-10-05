@@ -95,6 +95,11 @@ class ContextOrchestrator:
             compact_trigger=(plan.trigger if plan else None),
         )
 
+    async def build_async(self, snapshot):
+        from .context_orchestrator_async import build_context_async
+
+        return await build_context_async(self, snapshot)
+
     def _compact_request(self, metadata, snapshot):
         if metadata.get("prompt_over_budget"):
             return "auto_prompt_over_budget", "deterministic", ""

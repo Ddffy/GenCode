@@ -4,6 +4,8 @@ import json
 import subprocess
 import sys
 
+from conftest import collect_events
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.testing import ScriptedModelClient
 
@@ -36,10 +38,11 @@ def test_soft_final_readiness_does_not_warn_for_low_pressure_missing_provider_us
         final_readiness_mode="soft",
     )
 
-    events = list(agent.engine.run_turn("answer directly"))
+    events = collect_events(agent.engine.run_turn("answer directly"))
 
     assert [event["type"] for event in events] == [
         "turn_started",
+        "context_building",
         "model_requested",
         "model_parsed",
         "final",
@@ -59,7 +62,7 @@ def test_soft_final_readiness_reminds_once_then_allows_unchanged_final(tmp_path)
         max_steps=3,
     )
 
-    events = list(agent.engine.run_turn("write the result"))
+    events = collect_events(agent.engine.run_turn("write the result"))
 
     assert [event["type"] for event in events if event["type"] == "runtime_notice"] == [
         "runtime_notice"
@@ -95,7 +98,7 @@ def test_strict_final_readiness_blocks_unverified_workspace_changes(tmp_path):
         max_steps=2,
     )
 
-    events = list(agent.engine.run_turn("write the result"))
+    events = collect_events(agent.engine.run_turn("write the result"))
 
     stop_event = next(event for event in events if event["type"] == "stop")
     assert "Files changed" in stop_event["content"]
@@ -131,7 +134,7 @@ def test_strict_final_readiness_blocks_partial_success_workspace_changes(tmp_pat
         max_steps=2,
     )
 
-    events = list(agent.engine.run_turn("write the result with shell"))
+    events = collect_events(agent.engine.run_turn("write the result with shell"))
 
     stop_event = next(event for event in events if event["type"] == "stop")
     assert "partially succeeded" in stop_event["content"]
@@ -177,7 +180,7 @@ Continue the large task.
         agent.record({"role": "user", "content": f"request {index} " + ("x" * 900)})
         agent.record({"role": "assistant", "content": f"answer {index} " + ("y" * 900)})
 
-    events = list(agent.engine.run_turn("finish"))
+    events = collect_events(agent.engine.run_turn("finish"))
 
     assert any(event["type"] == "runtime_notice" for event in events)
     trace = read_jsonl(agent.current_run_dir / "trace.jsonl")

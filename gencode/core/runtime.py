@@ -5,44 +5,48 @@ The turn control loop lives in core.engine; tool execution and model-output
 parsing live in focused helper modules.
 """
 
+import asyncio
+import hashlib
+import inspect
 import json
 import os
 import textwrap
 import uuid
-import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ..features import memory as memorylib, skills as skillslib
+from ..features import memory as memorylib
 from ..features import repomap as repomaplib
+from ..features import skills as skillslib
 from ..features.sandbox import SandboxConfig, SandboxRunner
+from ..tools import registry as toolkit
+from . import model_output
 from .compact import CompactManager
 from .context_manager import ContextManager
 from .context_orchestrator import ContextOrchestrator
 from .engine import Engine
 from .git_integration import GitIntegration
-from . import model_output, tool_executor
-from .native_messages import native_prompt_contract
 from .model_router import ModelClientRouter
-from .plan_mode import PlanModeController
+from .native_messages import native_prompt_contract
 from .permissions import PermissionChecker
+from .plan_mode import PlanModeController
 from .run_store import RunStore
-from .runtime_consumers import default_runtime_consumers
+from .runtime_async import RuntimeAsyncMixin
 from .runtime_checkpoints import RuntimeCheckpointsMixin
-from .runtime_knowledge import RuntimeKnowledgeMixin
-from .runtime_retrieval import RuntimeRetrievalMixin
+from .runtime_consumers import default_runtime_consumers
 from .runtime_events import build_runtime_event
-from .runtime_secrets import REDACTED_VALUE, RuntimeSecretsMixin
+from .runtime_knowledge import RuntimeKnowledgeMixin
+from .runtime_locks import RuntimeLockManager
+from .runtime_retrieval import RuntimeRetrievalMixin
+from .runtime_secrets import RuntimeSecretsMixin
 from .session_events import SessionEventBus
-from .session_lifecycle import clear_runtime_session, resume_runtime_session
-from .session_store import SessionStore as SessionStore  # noqa: F401
-from .tool_repetition import is_repeated_tool_call
-from .tool_profiles import build_tool_profiles
+from .session_store import SessionStore as SessionStore  # noqa: PLC0414
 from .todo_ledger import TodoLedger
+from .tool_profiles import build_tool_profiles
+from .tool_repetition import tool_call_repetition_reason
 from .turn_history import TurnHistoryBuilder
 from .worker_manager import WorkerManager
-from ..tools import registry as toolkit
 from .workspace import MAX_HISTORY, WorkspaceContext, clip, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
@@ -60,10 +64,15 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
     "TEMP",
     "USER",
 )
-DEFAULT_FEATURE_FLAGS = dict(
-    memory=True, relevant_memory=True, typed_knowledge=True,
-    context_reduction=True, prompt_cache=True, repo_map=True, hybrid_retrieval=True
-)
+DEFAULT_FEATURE_FLAGS = {
+    "memory": True,
+    "relevant_memory": True,
+    "typed_knowledge": True,
+    "context_reduction": True,
+    "prompt_cache": True,
+    "repo_map": True,
+    "hybrid_retrieval": True,
+}
 CHECKPOINT_SCHEMA_VERSION = "phase1-v1"
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
 CHECKPOINT_FULL_VALID_STATUS = "full-valid"
@@ -81,7 +90,7 @@ class PromptPrefix:
     built_at: str
 
 
-class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixin, RuntimeRetrievalMixin):
+class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixin, RuntimeRetrievalMixin):
     def __init__(
         self,
         model_client,
@@ -117,6 +126,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         self.model_client_factory = model_client_factory
         self.model_client_router = model_client_router or ModelClientRouter(model_client)
         self.abort_requested = False
+        self.cancel_requested = False
         self.ask_user_callback = ask_user_callback
         self.sandbox_config = sandbox_config or SandboxConfig()
         self.sandbox_runner = SandboxRunner(
@@ -128,7 +138,27 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
         self.session_store = session_store
+        self.lock_manager = RuntimeLockManager(
+            Path(session_store.root).parent / "runtime-locks.sqlite3"
+        )
+        self.workspace_write_lock = asyncio.Lock()
+        self.workspace_lock_lease = None
+        self.inherited_workspace_lease = False
+        self.session_lock_lease = None
+        self.inherited_session_lease = False
+        self._bound_async_loop = None
+        self.turn_control_queue = None
+        self.turn_control_loop = None
+        self.turn_cancel_event = None
+        self.queued_turns = []
+        self.pending_steer_message = ""
+        self.event_log_degraded = {}
+        self.max_turn_seconds = 1800
+        self.model_idle_timeout = 90
+        self.tool_timeout_seconds = 300
+        self.max_worker_concurrency = 4
         self.approval_policy = approval_policy
+        self.approve_async_callback = None
         self.max_steps = max_steps
         self.max_new_tokens = max_new_tokens
         self.depth = depth
@@ -164,7 +194,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
             Path(workspace.repo_root) / ".gencode" / "runs"
         )
         self.session = session or {
-            "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
+            "id": datetime.now().astimezone().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
             "workspace_root": workspace.repo_root,
             "history": [],
@@ -383,6 +413,11 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         ]
         key_files = [
             str(item.get("path", "")).strip()
+            + (
+                " (lines " + ", ".join(str(value) for value in item.get("line_ranges", [])) + ")"
+                if item.get("line_ranges")
+                else ""
+            )
             for item in checkpoint.get("key_files", [])
             if str(item.get("path", "")).strip()
         ]
@@ -651,6 +686,15 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         result = self.context_orchestrator.build(snapshot)
         return result.prompt, result.metadata
 
+    async def _build_prompt_and_metadata_async(self, user_message):
+        refresh = await asyncio.to_thread(self.refresh_prefix)
+        self.resume_state = await asyncio.to_thread(self.evaluate_resume_state)
+        snapshot = self.context_orchestrator.snapshot(
+            user_message, prefix_refresh=refresh
+        )
+        result = await self.context_orchestrator.build_async(snapshot)
+        return result.prompt, result.metadata
+
     def compact_history(self, trigger="manual", keep_recent_turns=2, summary_mode="deterministic"):
         return self.compact_manager.compact(
             trigger=trigger, keep_recent_turns=keep_recent_turns, summary_mode=summary_mode
@@ -687,7 +731,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         for consumer in self.runtime_consumers:
             try:
                 consumer.handle(self, task_state, payload)
-            except Exception as exc:
+            except Exception as exc:  # A broken observer must not stop runtime event delivery.  # noqa: BLE001
                 error = {
                     "consumer": consumer.__class__.__name__,
                     "event": str(event),
@@ -705,6 +749,16 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         if task_state.status == "completed":
             return "No next step recorded."
         if task_state.stop_reason == "step_limit_reached":
+            read_ranges = self._current_turn_read_ranges()
+            if read_ranges:
+                evidence = "; ".join(
+                    f"{path} lines {', '.join(ranges)}"
+                    for path, ranges in read_ranges.items()
+                )
+                return (
+                    f"Continue the original request using the recorded evidence ({evidence}); "
+                    "do not reread covered ranges. Inspect only missing details, then answer."
+                )
             return "Resume from the latest checkpoint and continue the task."
         if task_state.last_tool:
             return f"Decide the next action after {task_state.last_tool}."
@@ -726,6 +780,8 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         它发生在 `run_tool()` 真正执行完工具之后、下一轮 prompt 组装之前。
         也就是说：工具结果先进入完整历史，再由这个函数择优沉淀成轻量记忆。
         """
+        if name in {"write_file", "patch_file", "run_shell"}:
+            self.invalidate_retrieval_cache()
         path = args.get("path")
         if not path:
             return
@@ -775,41 +831,17 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         self.memory.append_note(text, tags=tuple(tags), source=name, kind="process")
         self.session["memory"] = self.memory.to_dict()
 
-    def ask(self, user_message):
-        return self.engine.ask(user_message)
-
-    def abort_current_turn(self):
-        self.abort_requested = True
-        abort = getattr(self.model_client, "abort", None)
-        if callable(abort):
-            try:
-                abort()
-            except Exception:
-                pass
-
-    def ask_user(self, question, choices=None):
-        if self.ask_user_callback is None:
-            return "error: ask_user requires interactive mode"
-        choices = [str(choice) for choice in (choices or [])]
-        return str(self.ask_user_callback(str(question), choices))
-
-    def resume_session(self, session_id):
-        return resume_runtime_session(self, session_id)
-
-    def clear_session(self):
-        return clear_runtime_session(self)
-
-    def run_tool(self, name, args):
-        return tool_executor.run_tool(self, name, args)
-
     def repeated_tool_call(self, name, args):
-        return is_repeated_tool_call(self.session["history"], name, args)
+        return bool(self.repeated_tool_call_reason(name, args))
+
+    def repeated_tool_call_reason(self, name, args):
+        return tool_call_repetition_reason(self.session["history"], name, args)
 
     @staticmethod
     def new_task_id():
         return (
             "task_"
-            + datetime.now().strftime("%Y%m%d-%H%M%S")
+            + datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
             + "-"
             + uuid.uuid4().hex[:6]
         )
@@ -818,7 +850,7 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
     def new_run_id():
         return (
             "run_"
-            + datetime.now().strftime("%Y%m%d-%H%M%S")
+            + datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
             + "-"
             + uuid.uuid4().hex[:6]
         )
@@ -857,8 +889,8 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         """把通用工具校验和 runtime 级额外约束串起来。"""
         toolkit.validate_tool(self, name, args)
 
-    def tool_run_shell(self, args):
-        return toolkit.tool_run_shell(self, args)
+    async def tool_run_shell(self, args):
+        return await toolkit.tool_run_shell_async(self, args)
 
     def approve(self, name, args):
         if self.read_only:
@@ -874,6 +906,15 @@ class GenCode(RuntimeSecretsMixin, RuntimeCheckpointsMixin, RuntimeKnowledgeMixi
         except EOFError:
             return False
         return answer.strip().lower() in {"y", "yes"}
+
+    async def approve_async(self, name, args):
+        callback = self.approve_async_callback
+        if callback is None:
+            return await asyncio.to_thread(self.approve, name, args)
+        result = callback(name, args)
+        if inspect.isawaitable(result):
+            result = await result
+        return bool(result)
 
     parse = staticmethod(model_output.parse)
     retry_notice = staticmethod(model_output.retry_notice)

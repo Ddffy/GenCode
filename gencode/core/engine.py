@@ -4,7 +4,10 @@ The runtime owns state and persistence. Engine owns the control loop that turns
 one user request into model calls, tool executions, and user-visible events.
 """
 
+import asyncio
+import contextvars
 import time
+from contextlib import AsyncExitStack
 
 from ..features import memory as memorylib
 from .completion_governance import (
@@ -14,13 +17,16 @@ from .completion_governance import (
     finish_successful_run,
 )
 from .context_replacements import commit_proposed_replacements
+from .engine_failures import finish_unexpected_run_error
 from .engine_helpers import (
+    _set_fast_read_only_qa,
     complete_runtime_model,
     execute_tool_batch,
     handle_prompt_checkpoints,
     request_step_limit_summary,
     should_retry_model_error,
 )
+from .engine_stream import TURN_STREAM_EVENTS, VisibleTextStream
 from .model_errors import finish_model_error
 from .task_state import STOP_REASON_FINAL_GATE_BLOCKED, TaskState
 from .turn_transitions import (
@@ -34,15 +40,87 @@ from .turn_transitions import (
 from .workspace import clip, now
 
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
+READ_ONLY_QA_STEP_BUDGET = 28
+READ_ONLY_QA_ATTEMPT_BUDGET = 8
+READ_ONLY_QA_EVIDENCE_STEP_BUDGET = 12
+READ_ONLY_QA_FINAL_MAX_NEW_TOKENS = 1800
+READ_ONLY_QA_FINAL_NOTICE = (
+    "Evidence budget reached. Do not call more tools; answer the original question "
+    "now using the evidence already collected. Keep the complete answer under "
+    "about 1200 Chinese characters, with at most five concise bullets."
+)
+
+
+def _is_read_only_qa_request(user_message):
+    text = str(user_message or "").strip().lower()
+    for negated_action in (
+        "不要修改代码", "不修改代码", "无需修改代码", "不需要修改代码",
+        "不要改代码", "不改代码", "do not modify code", "don't modify code",
+        "without modifying code",
+    ):
+        text = text.replace(negated_action, "")
+    question_markers = (
+        "说说", "介绍", "解释", "讲讲", "详细说", "怎么", "如何", "为什么",
+        "是什么", "是否", "对比", "有哪些", "what is", "how does", "explain",
+        "describe", "compare",
+    )
+    action_markers = (
+        "改一下", "修改代码", "帮我改", "帮我实现", "实现这个功能", "修复这个",
+        "添加功能", "删除文件", "运行测试", "执行测试", "提交代码", "commit一下",
+        "please implement", "implement this", "fix this", "change the code",
+        "run tests", "commit the changes",
+    )
+    return any(marker in text for marker in question_markers) and not any(
+        marker in text for marker in action_markers
+    )
+
+
+def _turn_tool_step_budget(user_message, max_steps):
+    if _is_read_only_qa_request(user_message):
+        return min(int(max_steps), READ_ONLY_QA_STEP_BUDGET)
+    return int(max_steps)
+
+
+def _read_only_qa_final_only(*, read_only_qa, tool_steps, native_mode):
+    return bool(
+        read_only_qa
+        and native_mode
+        and int(tool_steps) >= READ_ONLY_QA_EVIDENCE_STEP_BUDGET
+    )
+
+
+def _read_only_qa_prompt(user_message):
+    return (
+        f"{user_message}\n\n"
+        "只读仓库问答执行约束：不要输出探索过程；先用 search(pattern, path) 定位符号，"
+        "再用 read_file(path, start, end) 读取精确代码段；必须显式传 start/end，单次最多 80 行，"
+        "不要整文件读取；不要重复读取同一路径，也不要读取 .gencode/runs 下的产物。"
+        "不使用 Shell，不修改文件；针对跨文件问题沿实际调用链核对入口、结果回传和停止/失败路径，"
+        "证据足够后立即回答。最终用中文控制在约 1000 字以内，覆盖结论、关键运行机制和文件/函数出处；"
+        "区分代码中确认的事实与推断，未核实的细节明确说明。"
+    )
 
 
 class Engine:
     def __init__(self, runtime):
         self.runtime = runtime
+        self._background_turn_tasks = set()
+        self.runtime.session_event_bus.set_degradation_handler(
+            self._schedule_event_log_degradation
+        )
+        self._run_id_queue = contextvars.ContextVar(
+            f"gencode_run_id_queue_{id(self)}", default=None
+        )
+        self._announced_run_ids = contextvars.ContextVar(
+            f"gencode_announced_runs_{id(self)}", default=None
+        )
 
     def ask(self, user_message):
+        return self.runtime.ask(user_message)
+
+    async def ask_async(self, user_message):
         final_answer = ""
-        for event in self.run_turn(user_message):
+        async for event in self.run_turn(user_message):
             if event["type"] in {"final", "stop"}:
                 final_answer = event["content"]
         return final_answer
@@ -69,7 +147,415 @@ class Engine:
                 "content": notification,
             }
 
-    def run_turn(self, user_message):
+    def _spawn_turn(self, user_message):
+        run_ids = asyncio.Queue()
+        task = asyncio.create_task(self._run_turn_producer(user_message, run_ids))
+        self._background_turn_tasks.add(task)
+        task.add_done_callback(self._observe_background_turn)
+        return run_ids, task
+
+    def _observe_background_turn(self, task):
+        self._background_turn_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    def _schedule_event_log_degradation(self, run_id, origin_loop=None):
+        loop = origin_loop or self.runtime._bound_async_loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+
+        def schedule():
+            task = loop.create_task(self._record_event_log_degradation(run_id))
+            self._background_turn_tasks.add(task)
+            task.add_done_callback(self._observe_background_turn)
+
+        try:
+            loop.call_soon_threadsafe(schedule)
+        except RuntimeError:
+            return
+
+    async def start_turn(self, user_message):
+        """Start a detached turn and return its first Run ID for later replay."""
+        run_ids, task = self._spawn_turn(user_message)
+        run_id = await run_ids.get()
+        if run_id is None:
+            await task
+            return ""
+        return str(run_id)
+
+    async def subscribe_run(self, run_id, after_seq=0):
+        """Subscribe or resume a Run event stream from its last Run sequence."""
+        async for record in self.runtime.session_event_bus.subscribe(run_id, after_seq):
+            event = dict(record)
+            event["type"] = event.pop("event", "event")
+            yield event
+
+    async def subscribe_turn(self, run_id, after_seq=0):
+        """Subscribe to the user-facing subset of a Run, resumable by cursor."""
+        async for event in self.subscribe_run(run_id, after_seq):
+            if event.get("type") in TURN_STREAM_EVENTS:
+                yield event
+
+    async def run_turn(self, user_message):
+        """Start one detached producer and stream its persisted events to this consumer.
+
+        Closing this generator only detaches the consumer; it does not cancel the
+        producer. Call ``subscribe_run(run_id, after_seq)`` to resume a stream.
+        """
+        run_ids, task = self._spawn_turn(user_message)
+        while True:
+            run_id = await run_ids.get()
+            if run_id is None:
+                break
+            async for event in self.subscribe_turn(run_id):
+                yield event
+        await task
+
+    async def _run_turn_producer(self, user_message, run_ids):
+        queue_token = self._run_id_queue.set(run_ids)
+        announced_token = self._announced_run_ids.set(set())
+        try:
+            try:
+                await self._drive_turn(user_message)
+            except Exception as exc:  # noqa: BLE001 - detached Runs must publish a terminal result
+                await finish_unexpected_run_error(self, user_message, exc)
+        finally:
+            self._announced_run_ids.reset(announced_token)
+            self._run_id_queue.reset(queue_token)
+            await run_ids.put(None)
+
+    async def _drive_turn(self, user_message):
+        agent = self.runtime
+        agent._bind_async_loop(asyncio.get_running_loop())
+        inherited_session_lease = bool(agent.inherited_session_lease)
+        inherited_lease = bool(agent.inherited_workspace_lease)
+        async with AsyncExitStack() as lock_stack:
+            if not inherited_session_lease:
+                session_lease = await agent.lock_manager.acquire_session(agent.session["id"])
+                await lock_stack.enter_async_context(session_lease)
+                agent.session_lock_lease = session_lease
+            workspace_lease = None
+            if not inherited_lease:
+                mode = "read" if agent.read_only else "write"
+                workspace_lease = await agent.lock_manager.acquire_workspace(
+                    agent.root, mode
+                )
+                await lock_stack.enter_async_context(workspace_lease)
+                agent.workspace_lock_lease = workspace_lease
+            try:
+                current_message = user_message
+                while True:
+                    async for _ in self._run_turn_with_timeout(current_message):
+                        pass
+                    if not agent.queued_turns:
+                        break
+                    current_message = agent.queued_turns.pop(0)
+            finally:
+                await agent.worker_manager.shutdown_async()
+                if not inherited_session_lease:
+                    agent.session_lock_lease = None
+                if not inherited_lease:
+                    agent.workspace_lock_lease = None
+
+    async def _run_turn_with_timeout(self, user_message):
+        agent = self.runtime
+        agent.turn_control_loop = asyncio.get_running_loop()
+        agent.turn_control_queue = asyncio.Queue()
+        agent.turn_cancel_event = asyncio.Event()
+        agent.abort_requested = False
+        agent.cancel_requested = False
+        self._turn_started_at = time.monotonic()
+        self._steered_message = ""
+        try:
+            async with asyncio.timeout(agent.max_turn_seconds):
+                async for event in self._publish_run_events(
+                    self._run_turn_events(user_message)
+                ):
+                    yield event
+        except asyncio.TimeoutError:
+            task_state = agent.current_task_state
+            if task_state is not None and task_state.status == "running":
+                async for event in self._publish_run_events(
+                    finish_stopped_run(
+                        self,
+                        task_state,
+                        user_message,
+                        "Stopped after reaching the turn timeout.",
+                        "timeout",
+                        self._turn_started_at,
+                    )
+                ):
+                    yield event
+        except asyncio.CancelledError:
+            task_state = agent.current_task_state
+            if task_state is not None and task_state.status == "running":
+                async for event in self._publish_run_events(finish_stopped_run(
+                    self,
+                    task_state,
+                    task_state.user_request,
+                    "Stopped after caller cancellation.",
+                    "aborted",
+                    self._turn_started_at,
+                )):
+                    yield event
+            raise
+        finally:
+            await self._process_control_events()
+            agent.turn_control_queue = None
+            agent.turn_control_loop = None
+            agent.turn_cancel_event = None
+            _set_fast_read_only_qa(agent, False)
+
+    async def _consume_model_stream(
+        self,
+        agent,
+        task_state,
+        prompt,
+        user_message,
+        native_tools,
+        max_new_tokens,
+        prompt_cache_key,
+        prompt_cache_retention,
+    ):
+        stream = complete_runtime_model(
+            agent,
+            prompt,
+            user_message,
+            max_new_tokens,
+            tools=native_tools,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_retention=prompt_cache_retention,
+        )
+        iterator = stream.__aiter__()
+        next_event = asyncio.create_task(iterator.__anext__())
+        control_task = None
+        worker_task = None
+        visible = VisibleTextStream()
+        pending_text = ""
+        last_text_flush = time.monotonic()
+        try:
+            while True:
+                control_queue = agent.turn_control_queue
+                if control_task is None and control_queue is not None:
+                    control_task = asyncio.create_task(control_queue.get())
+                if worker_task is None:
+                    worker_task = asyncio.create_task(agent.worker_manager.next_event())
+                waiting = {next_event}
+                if control_task is not None:
+                    waiting.add(control_task)
+                if worker_task is not None:
+                    waiting.add(worker_task)
+                wait_timeout = agent.model_idle_timeout
+                if pending_text:
+                    wait_timeout = min(
+                        wait_timeout,
+                        max(0.0, 0.05 - (time.monotonic() - last_text_flush)),
+                    )
+                done, _ = await asyncio.wait(
+                    waiting,
+                    timeout=wait_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    if pending_text:
+                        yield {
+                            "type": "text_delta",
+                            "run_id": task_state.run_id,
+                            "content": pending_text,
+                        }
+                        pending_text = ""
+                        last_text_flush = time.monotonic()
+                        continue
+                    next_event.cancel()
+                    await asyncio.gather(next_event, return_exceptions=True)
+                    await iterator.aclose()
+                    raise asyncio.TimeoutError("model stream idle timeout")
+                if worker_task is not None and worker_task in done:
+                    yield worker_task.result()
+                    worker_task = None
+                    if next_event not in done:
+                        continue
+                if control_task is not None and control_task in done:
+                    control = control_task.result()
+                    control_task = None
+                    kind = control.get("type")
+                    if kind == "queue":
+                        agent.queued_turns.append(str(control.get("content", "")))
+                    elif kind == "steer":
+                        agent.pending_steer_message = str(control.get("content", ""))
+                        await self._abort_model_request(agent)
+                        next_event.cancel()
+                        await asyncio.gather(next_event, return_exceptions=True)
+                        if worker_task is not None:
+                            worker_task.cancel()
+                            await asyncio.gather(worker_task, return_exceptions=True)
+                        await iterator.aclose()
+                        yield {"type": "_model_steered", "run_id": task_state.run_id}
+                        return
+                    elif kind == "cancel":
+                        agent.abort_requested = True
+                        agent.cancel_requested = True
+                        if agent.turn_cancel_event is not None:
+                            agent.turn_cancel_event.set()
+                        await self._abort_model_request(agent)
+                        next_event.cancel()
+                        await asyncio.gather(next_event, return_exceptions=True)
+                        if worker_task is not None:
+                            worker_task.cancel()
+                            await asyncio.gather(worker_task, return_exceptions=True)
+                        await iterator.aclose()
+                        yield {"type": "_model_cancelled", "run_id": task_state.run_id}
+                        return
+                    if next_event not in done:
+                        continue
+                if next_event not in done:
+                    continue
+                try:
+                    item = next_event.result()
+                except StopAsyncIteration:
+                    break
+                if item.type == "text_delta":
+                    pending_text += "".join(visible.feed(item.text))
+                    if len(pending_text) >= 256:
+                        yield {
+                            "type": "text_delta",
+                            "run_id": task_state.run_id,
+                            "content": pending_text,
+                        }
+                        pending_text = ""
+                        last_text_flush = time.monotonic()
+                elif item.type == "completed":
+                    pending_text += "".join(visible.finish())
+                    if pending_text:
+                        yield {
+                            "type": "text_delta",
+                            "run_id": task_state.run_id,
+                            "content": pending_text,
+                        }
+                        pending_text = ""
+                    yield {
+                        "type": "_model_completed",
+                        "run_id": task_state.run_id,
+                        "result": item.result,
+                    }
+                    return
+                next_event = asyncio.create_task(iterator.__anext__())
+        finally:
+            if not next_event.done():
+                next_event.cancel()
+                await asyncio.gather(next_event, return_exceptions=True)
+            for pending in (control_task, worker_task):
+                if pending is not None and not pending.done():
+                    pending.cancel()
+            await asyncio.gather(
+                *(task for task in (control_task, worker_task) if task is not None),
+                return_exceptions=True,
+            )
+            await iterator.aclose()
+
+    async def _abort_model_request(self, agent):
+        abort = getattr(agent.model_client, "abort", None)
+        if callable(abort):
+            result = abort()
+            if hasattr(result, "__await__"):
+                await result
+
+    async def _publish_run_events(self, events):
+        if hasattr(events, "__aiter__"):
+            async for event in events:
+                async for published in self._publish_event(event):
+                    yield published
+        else:
+            for event in events:
+                async for published in self._publish_event(event):
+                    yield published
+
+    async def _publish_event(self, event):
+        event = dict(event)
+        run_id = str(event.get("run_id", "") or self.runtime.current_run_id)
+        event_type = str(event.get("type", "event"))
+        announced_run_ids = self._announced_run_ids.get()
+        if run_id and announced_run_ids is not None and run_id not in announced_run_ids:
+            run_id_queue = self._run_id_queue.get()
+            if run_id_queue is not None:
+                run_id_queue.put_nowait(run_id)
+            announced_run_ids.add(run_id)
+        if event_type == "turn_started":
+            self.runtime.session_event_bus.set_active_run(run_id)
+        record = await self.runtime.session_event_bus.publish(
+            event_type,
+            {**event, "run_id": run_id, "source": event.get("source", "runtime")},
+        )
+        event["run_id"] = run_id
+        event["run_seq"] = int(record.get("run_seq", 0))
+        event["source"] = record.get("source", "runtime")
+        if record.get("event_log_degraded") or self.runtime.session_event_bus.degraded(run_id):
+            await self._record_event_log_degradation(run_id)
+        yield event
+
+    def _publish_sync_events(self, events):
+        yield from events
+
+    async def _record_event_log_degradation(self, run_id):
+        agent = self.runtime
+        task_state = agent.current_task_state
+        if task_state is None or task_state.run_id != run_id:
+            return
+        gap = agent.session_event_bus.degraded(run_id)
+        already_recorded = (
+            task_state.event_log_degraded and task_state.event_log_gap == gap
+        )
+        task_state.event_log_degraded = True
+        task_state.event_log_gap = gap
+        agent.event_log_degraded[run_id] = dict(gap)
+        for attempt in range(3):
+            try:
+                if not already_recorded:
+                    await asyncio.to_thread(
+                        agent.run_store.write_task_state, task_state
+                    )
+                if task_state.status != "running":
+                    report = agent.redact_artifact(agent.build_report(task_state))
+                    await asyncio.to_thread(
+                        agent.run_store.write_report, task_state, report
+                    )
+                return
+            except OSError as exc:
+                if attempt == 2:
+                    agent.emit_trace(
+                        task_state,
+                        "event_log_degradation_persist_failed",
+                        {"error_type": type(exc).__name__},
+                    )
+                    return
+                await asyncio.sleep(0.01 * (attempt + 1))
+
+    async def _process_control_events(self):
+        agent = self.runtime
+        queue = agent.turn_control_queue
+        if queue is None:
+            return
+        while True:
+            try:
+                control = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            kind = control.get("type")
+            if kind == "queue":
+                agent.queued_turns.append(str(control.get("content", "")))
+            elif kind == "steer":
+                task_state = agent.current_task_state
+                if task_state is not None and task_state.status != "running":
+                    agent.queued_turns.append(str(control.get("content", "")))
+                else:
+                    agent.pending_steer_message = str(control.get("content", ""))
+            elif kind == "cancel":
+                agent.abort_requested = True
+                agent.cancel_requested = True
+                if agent.turn_cancel_event is not None:
+                    agent.turn_cancel_event.set()
+
+    async def _run_turn_events(self, user_message):
         agent = self.runtime
         run_started_at = time.monotonic()
         task_state = TaskState.create(
@@ -88,23 +574,17 @@ class Engine:
         agent.last_knowledge_maintenance = {
             "candidates": [], "quarantined": [], "errors": [], "auto_dream": {}
         }
+        agent._retrieval_section_cache = {}
         agent.current_run_dir = agent.run_store.start_run(task_state)
         # Git 基线必须在本轮第一个工具动作前捕获；后续每个写操作都只
         # 提交本轮新增的安全路径，验收失败时才能精确回到上一个 Agent 提交。
         if hasattr(agent, "git"):
             agent.git.begin_turn(task_state.run_id)
-        agent.session_event_bus.emit(
-            "turn_started",
-            {
-                "run_id": task_state.run_id,
-                "task_id": task_state.task_id,
-                "runtime_mode": agent.runtime_mode,
-            },
-        )
         yield {
             "type": "turn_started",
             "run_id": task_state.run_id,
             "task_id": task_state.task_id,
+            "runtime_mode": agent.runtime_mode,
         }
 
         agent.memory.set_task_summary(user_message)
@@ -125,26 +605,80 @@ class Engine:
         tool_steps = 0
         attempts = 0
         provider_retries = {}
-        # 不放大 attempts，避免出现"看不见的隐形重试"——失败必须被用户察觉。
-        max_attempts = agent.max_steps + 2
+        read_only_qa = _is_read_only_qa_request(user_message)
+        step_budget = _turn_tool_step_budget(user_message, agent.max_steps)
+        max_attempts = min(
+            step_budget + 2,
+            READ_ONLY_QA_ATTEMPT_BUDGET
+            if read_only_qa
+            else step_budget + 2,
+        )
+        task_state.evidence_summaries["tool_step_budget"] = {
+            "limit": step_budget,
+            "kind": "read_only_qa" if read_only_qa else "default",
+        }
+        _set_fast_read_only_qa(agent, read_only_qa)
 
-        while tool_steps < agent.max_steps and attempts < max_attempts:
+        while tool_steps < step_budget and attempts < max_attempts:
+            await self._process_control_events()
+            if agent.pending_steer_message:
+                user_message = agent.pending_steer_message
+                agent.pending_steer_message = ""
+                agent.memory.set_task_summary(user_message)
+                agent.record({"role": "user", "content": user_message, "created_at": now()})
+                agent.session_event_bus.emit(
+                    "user_message",
+                    {"run_id": task_state.run_id, "content": clip(user_message, 300), "source": "steer"},
+                )
             if agent.abort_requested:
-                yield from finish_stopped_run(
+                for event in finish_stopped_run(
                     self,
                     task_state,
                     user_message,
-                    "Stopped after abort request.",
+                    "Stopped after cancel request." if agent.cancel_requested else "Stopped after abort request.",
                     "aborted",
                     run_started_at,
-                )
+                ):
+                    yield event
                 return
-            yield from self._drain_worker_notification_events()
+            for event in self._drain_worker_notification_events():
+                yield event
+            for event in agent.worker_manager.drain_events():
+                yield event
             attempts += 1
             task_state.record_attempt()
             agent.run_store.write_task_state(task_state)
             prompt_started_at = time.monotonic()
-            prompt, prompt_metadata = agent._build_prompt_and_metadata(user_message)
+            yield {
+                "type": "context_building",
+                "run_id": task_state.run_id,
+                "attempts": task_state.attempts,
+                "tool_steps": task_state.tool_steps,
+            }
+            prompt_request = (
+                _read_only_qa_prompt(user_message)
+                if agent.fast_read_only_qa
+                else user_message
+            )
+            native_mode = bool(
+                getattr(agent.model_client, "supports_native_tool_calling", False)
+                and hasattr(agent.model_client, "stream_messages")
+            )
+            qa_final_only = _read_only_qa_final_only(
+                read_only_qa=read_only_qa,
+                tool_steps=tool_steps,
+                native_mode=native_mode,
+            )
+            prompt, prompt_metadata = await agent._build_prompt_and_metadata_async(
+                prompt_request
+            )
+            model_user_message = (
+                f"{user_message}\n\n{READ_ONLY_QA_FINAL_NOTICE}"
+                if qa_final_only
+                else user_message
+            )
+            if qa_final_only and not native_mode:
+                prompt = f"{prompt}\n\n{READ_ONLY_QA_FINAL_NOTICE}"
             if commit_proposed_replacements(agent.session, prompt_metadata):
                 agent.session_path = agent.session_store.save(agent.session)
             agent.emit_trace(
@@ -180,14 +714,7 @@ class Engine:
                     "attempts": task_state.attempts,
                     "tool_steps": task_state.tool_steps,
                     "prompt_cache_key": prompt_metadata.get("prompt_cache_key"),
-                },
-            )
-            agent.session_event_bus.emit(
-                "model_requested",
-                {
-                    "run_id": task_state.run_id,
-                    "attempts": task_state.attempts,
-                    "tool_steps": task_state.tool_steps,
+                    "qa_final_only": qa_final_only,
                 },
             )
             yield {
@@ -209,26 +736,79 @@ class Engine:
                 if hasattr(agent, "native_tool_definitions")
                 else []
             )
+            if qa_final_only:
+                native_tools = []
             try:
-                result = complete_runtime_model(
+                result = None
+                steered = False
+                async for stream_event in self._consume_model_stream(
                     agent,
+                    task_state,
                     prompt,
-                    user_message,
-                    agent.max_new_tokens,
-                    tools=native_tools,
-                    prompt_cache_key=prompt_cache_key,
-                    prompt_cache_retention=prompt_cache_retention,
-                )
-            except Exception as exc:
+                    model_user_message,
+                    native_tools,
+                    min(agent.max_new_tokens, READ_ONLY_QA_FINAL_MAX_NEW_TOKENS)
+                    if qa_final_only
+                    else agent.max_new_tokens,
+                    prompt_cache_key,
+                    prompt_cache_retention,
+                ):
+                    if stream_event["type"] == "_model_completed":
+                        result = stream_event["result"]
+                    elif stream_event["type"] == "_model_steered":
+                        steered = True
+                    elif stream_event["type"] == "_model_cancelled":
+                        break
+                    else:
+                        yield stream_event
+                await self._process_control_events()
+                steered = steered or bool(agent.pending_steer_message)
+                if steered:
+                    user_message = self._steered_message or agent.pending_steer_message
+                    self._steered_message = ""
+                    agent.pending_steer_message = ""
+                    agent.memory.set_task_summary(user_message)
+                    agent.record({"role": "user", "content": user_message, "created_at": now()})
+                    agent.session_event_bus.emit(
+                        "user_message",
+                        {"run_id": task_state.run_id, "content": clip(user_message, 300), "source": "steer"},
+                    )
+                    continue
                 if agent.abort_requested:
-                    yield from finish_stopped_run(
+                    for event in finish_stopped_run(
                         self,
                         task_state,
                         user_message,
-                        "Stopped after abort request.",
+                        "Stopped after cancel request.",
                         "aborted",
                         run_started_at,
-                    )
+                    ):
+                        yield event
+                    return
+                if result is None:
+                    raise RuntimeError("model stream ended without a completion")
+            except Exception as exc:  # Normalize provider/runtime failures into a stopped run.  # noqa: BLE001
+                if agent.abort_requested:
+                    for event in finish_stopped_run(
+                        self,
+                        task_state,
+                        user_message,
+                        "Stopped after cancel request." if agent.cancel_requested else "Stopped after abort request.",
+                        "aborted",
+                        run_started_at,
+                    ):
+                        yield event
+                    return
+                if isinstance(exc, asyncio.TimeoutError):
+                    for event in finish_stopped_run(
+                        self,
+                        task_state,
+                        user_message,
+                        "Stopped after the model stream became idle.",
+                        "model_idle_timeout",
+                        run_started_at,
+                    ):
+                        yield event
                     return
                 if should_retry_model_error(exc, provider_retries):
                     code = getattr(exc, "code", type(exc).__name__)
@@ -255,7 +835,7 @@ class Engine:
                     )
                     emit_continue_transition(agent, task_state, CONTINUE_PROVIDER_RETRY)
                     continue
-                yield from finish_model_error(
+                for event in finish_model_error(
                     self,
                     task_state,
                     user_message,
@@ -263,17 +843,19 @@ class Engine:
                     exc,
                     int((time.monotonic() - model_started_at) * 1000),
                     int((time.monotonic() - run_started_at) * 1000),
-                )
+                ):
+                    yield event
                 return
             if agent.abort_requested:
-                yield from finish_stopped_run(
+                for event in finish_stopped_run(
                     self,
                     task_state,
                     user_message,
-                    "Stopped after abort request.",
+                    "Stopped after cancel request." if agent.cancel_requested else "Stopped after abort request.",
                     "aborted",
                     run_started_at,
-                )
+                ):
+                    yield event
                 return
             raw = result.text
             completion_metadata = dict(
@@ -303,9 +885,13 @@ class Engine:
                         "created_at": now(),
                     }
                 )
-            elif completion_metadata.get("native_tool_calling") and raw.strip():
-                # Native providers return ordinary assistant text for a final
-                # answer; the legacy parser must not turn that into a retry.
+            elif (
+                completion_metadata.get("native_tool_calling")
+                or completion_metadata.get("native_message_mode")
+            ) and raw.strip():
+                # Native structured-message calls return ordinary assistant
+                # text even when tools were deliberately withheld for the
+                # final-answer turn; the legacy parser must not turn it into a retry.
                 payload = (
                     agent.extract(raw, "final")
                     if "<final>" in raw
@@ -324,10 +910,6 @@ class Engine:
                     "duration_ms": duration_ms,
                 },
             )
-            agent.session_event_bus.emit(
-                "model_parsed",
-                {"run_id": task_state.run_id, "kind": kind, "duration_ms": duration_ms},
-            )
             yield {
                 "type": "model_parsed",
                 "run_id": task_state.run_id,
@@ -337,23 +919,29 @@ class Engine:
 
             if kind in {"tool", "tools"}:
                 tools = [payload] if kind == "tool" else list(payload)
-                executed_tools = yield from execute_tool_batch(
+                attempted = [0]
+                async for event in execute_tool_batch(
                     self,
                     task_state,
                     user_message,
                     tools,
                     tool_steps=tool_steps,
-                )
+                    step_budget=step_budget,
+                    attempted=attempted,
+                ):
+                    yield event
+                executed_tools = attempted[0]
                 tool_steps += executed_tools
                 if agent.abort_requested:
-                    yield from finish_stopped_run(
+                    for event in finish_stopped_run(
                         self,
                         task_state,
                         user_message,
-                        "Stopped after abort request.",
+                        "Stopped after cancel request." if agent.cancel_requested else "Stopped after abort request.",
                         "aborted",
                         run_started_at,
-                    )
+                    ):
+                        yield event
                     return
                 emit_continue_transition(
                     agent, task_state, CONTINUE_TOOL_BATCH_EXECUTED,
@@ -381,7 +969,8 @@ class Engine:
                 continue
 
             final = (payload or raw).strip()
-            yield from self._drain_worker_notification_events()
+            for event in self._drain_worker_notification_events():
+                yield event
             if agent.runtime_mode == "plan" and not agent.plan_mode.can_finish():
                 notice = agent.plan_mode.final_notice()
                 agent.record(
@@ -418,38 +1007,60 @@ class Engine:
                 )
                 continue
             if readiness_action == "block":
-                yield from finish_stopped_run(
+                for event in finish_stopped_run(
                     self,
                     task_state,
                     user_message,
                     notice,
                     STOP_REASON_FINAL_GATE_BLOCKED,
                     run_started_at,
-                )
+                ):
+                    yield event
                 return
 
-            yield from finish_successful_run(
+            await agent.worker_manager.wait_idle()
+            await self._process_control_events()
+            if agent.abort_requested:
+                for event in finish_stopped_run(
+                    self,
+                    task_state,
+                    user_message,
+                    "Stopped after cancel request.",
+                    "aborted",
+                    run_started_at,
+                ):
+                    yield event
+                return
+            if agent.pending_steer_message:
+                user_message = agent.pending_steer_message
+                agent.pending_steer_message = ""
+                agent.memory.set_task_summary(user_message)
+                agent.record({"role": "user", "content": user_message, "created_at": now()})
+                continue
+            for event in agent.worker_manager.drain_events():
+                yield event
+            for event in self._drain_worker_notification_events():
+                yield event
+            for event in finish_successful_run(
                 self, task_state, user_message, final, run_started_at
-            )
+            ):
+                yield event
             return
 
-        if attempts >= max_attempts and tool_steps < agent.max_steps:
-            final = "Stopped after too many malformed model responses without a valid tool call or final answer."
+        attempts_exhausted = attempts >= max_attempts and tool_steps < step_budget
+        summary = None
+        if tool_steps > 0 and (attempts_exhausted or tool_steps >= step_budget):
+            summary = await request_step_limit_summary(self, task_state, user_message)
+        if summary:
+            final = f"{summary}\n\nstep 预算上限已耗尽；如需继续，请使用 /resume。"
+            task_state.stop_step_limit(final)
+        elif attempts_exhausted:
+            final = "Stopped after too many model attempts without a final answer."
             task_state.stop_retry_limit(final)
         else:
-            summary = None
-            if tool_steps > 0:
-                summary = request_step_limit_summary(self, task_state, user_message)
-            if summary:
-                final = (
-                    summary
-                    + "\n\n— 已达本轮 step 预算上限（max_steps）。以上是当前进展总结。"
-                    "继续工作：在 REPL 输入 /resume 续接本会话，或直接说"
-                    "「继续」让我接着干。"
-                )
-            else:
-                final = "Stopped after reaching the step limit without a final answer."
+            final = "Stopped after reaching the tool-step budget without a final answer."
             task_state.stop_step_limit(final)
-        yield from finish_limited_run(
+        for event in finish_limited_run(
             self, task_state, user_message, final, run_started_at
-        )
+        ):
+            yield event

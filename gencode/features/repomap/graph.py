@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 from ...core.workspace import IGNORED_PATH_NAMES
@@ -33,10 +33,10 @@ def collect_source_files(root):
     """Deterministic bounded BFS over parseable files, ignored dirs skipped."""
     root = Path(root)
     files = []
-    queue = [root]
+    queue = deque([root])
     visited_dirs = 0
     while queue and len(files) < MAX_FILES and visited_dirs < MAX_DIRS:
-        current = queue.pop(0)
+        current = queue.popleft()
         visited_dirs += 1
         try:
             entries = sorted(current.iterdir())
@@ -79,7 +79,7 @@ def _file_sha256(abs_path):
 
 
 class TagCache:
-    """(path, sha256)-keyed tag cache stored under .gencode/repomap/."""
+    """Content-addressed tags with a stat-based fast path for unchanged files."""
 
     def __init__(self, root, cache_dir=None):
         self.root = Path(root)
@@ -106,12 +106,31 @@ class TagCache:
             return None
         return cached
 
-    def put(self, file_tags):
+    def get_by_stat(self, rel_path, *, size, mtime_ns):
+        cached = self._data["files"].get(rel_path)
+        if (
+            cached
+            and int(cached.get("size", -1)) == int(size)
+            and int(cached.get("mtime_ns", -1)) == int(mtime_ns)
+        ):
+            return cached
+        return None
+
+    def refresh_stat(self, rel_path, *, size, mtime_ns):
+        cached = self._data["files"].get(rel_path)
+        if cached is None:
+            return
+        cached["size"] = int(size)
+        cached["mtime_ns"] = int(mtime_ns)
+
+    def put(self, file_tags, *, size, mtime_ns):
         self._data["files"][file_tags.path] = {
             "sha": file_tags.sha256,
             "language": file_tags.language,
             "definitions": [list(tag) for tag in file_tags.definitions],
             "references": [list(tag) for tag in file_tags.references],
+            "size": int(size),
+            "mtime_ns": int(mtime_ns),
         }
 
     def save(self):
@@ -128,20 +147,60 @@ class TagCache:
             return False
 
 
-def load_tags(root, cache=None, cache_dir=None):
-    """Extract tags for all source files, reusing cache entries by sha."""
+def collect_source_file_states(root):
+    """Return the bounded repository file inventory and cheap stat versions."""
+    root = Path(root)
+    states = {}
+    for rel_path in collect_source_files(root):
+        try:
+            stat = (root / rel_path).stat()
+        except OSError:
+            continue
+        states[rel_path] = {
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+    return states
+
+
+def load_tags(root, cache=None, cache_dir=None, source_states=None):
+    """Extract tags, reusing stat-identical files without reading their bytes."""
     root = Path(root)
     tag_cache = cache if cache is not None else TagCache(root, cache_dir=cache_dir)
     tags_by_file = {}
     cache_dirty = False
-    for rel_path in collect_source_files(root):
+    if source_states is None:
+        source_states = collect_source_file_states(root)
+    for rel_path, state in source_states.items():
         abs_path = root / rel_path
         language = tagslib.language_for_path(rel_path)
         if language is None or not tagslib.pack_available():
             continue
+        stat_cached = tag_cache.get_by_stat(
+            rel_path, size=state["size"], mtime_ns=state["mtime_ns"]
+        )
+        if stat_cached is not None:
+            tags_by_file[rel_path] = tagslib.FileTags(
+                path=rel_path,
+                language=stat_cached.get("language") or language,
+                sha256=stat_cached["sha"],
+                definitions=tuple(
+                    (name, int(line))
+                    for name, line in stat_cached.get("definitions", [])
+                ),
+                references=tuple(
+                    (name, int(line))
+                    for name, line in stat_cached.get("references", [])
+                ),
+            )
+            continue
         sha = _file_sha256(abs_path)
         cached = tag_cache.get(rel_path, sha)
         if cached is not None:
+            tag_cache.refresh_stat(
+                rel_path, size=state["size"], mtime_ns=state["mtime_ns"]
+            )
+            cache_dirty = True
             tags_by_file[rel_path] = tagslib.FileTags(
                 path=rel_path,
                 language=cached.get("language") or language,
@@ -163,7 +222,9 @@ def load_tags(root, cache=None, cache_dir=None):
         )
         if file_tags is None:
             continue
-        tag_cache.put(file_tags)
+        tag_cache.put(
+            file_tags, size=state["size"], mtime_ns=state["mtime_ns"]
+        )
         cache_dirty = True
         tags_by_file[rel_path] = file_tags
     if cache_dirty:

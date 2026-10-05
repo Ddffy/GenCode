@@ -6,6 +6,7 @@
 """
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -21,15 +22,15 @@ from .config import (
     load_project_env,
     resolve_project_sandbox_config,
 )
-from .features import memory as memorylib
-from .features import skills as skillslib
-from .features.skills_runtime import invoke_skill
-from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
-from .providers.errors import sanitize_url
-from .providers.runtime import ProviderClientClasses, build_provider_runtime
 from .core.model_router import ModelClientRouter
 from .core.runtime import GenCode, SessionStore
 from .core.workspace import WorkspaceContext, middle, now
+from .features import memory as memorylib
+from .features import skills as skillslib
+from .features.skills_runtime import invoke_skill, invoke_skill_async
+from .providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from .providers.errors import sanitize_url
+from .providers.runtime import ProviderClientClasses, build_provider_runtime
 
 DEFAULT_SECRET_ENV_NAMES = (
     "GENCODE_API_KEY",
@@ -101,7 +102,7 @@ def _build_provider_runtime(args):
     if cached is not None:
         return cached
     runtime = build_provider_runtime(args, client_classes=_provider_client_classes())
-    setattr(args, "_provider_runtime", runtime)
+    args._provider_runtime = runtime
     return runtime
 
 
@@ -569,7 +570,7 @@ def handle_repl_command(agent, user_input):
         payload, error = parse_subagent_args(command_args)
         if error:
             return True, False, error
-        return True, False, agent.run_tool("agent", payload)
+        return True, False, asyncio.run(agent.run_tool("agent", payload))
     if user_input == "/context":
         return (
             True,
@@ -585,7 +586,7 @@ def handle_repl_command(agent, user_input):
         model = model.strip()
         if not model:
             return True, False, _format_model(agent)
-        setattr(agent.model_client, "model", model)
+        agent.model_client.model = model
         agent.session_event_bus.emit("model_changed", {"model": model})
         agent.refresh_prefix(force=True)
         return True, False, f"model: {model}"
@@ -610,6 +611,37 @@ def handle_repl_command(agent, user_input):
     if command and command in agent.skills:
         return True, False, invoke_skill(agent, command, arguments)
     return False, False, ""
+
+
+async def handle_repl_command_async(agent, user_input):
+    user_input = str(user_input or "").strip()
+    raw_command = ""
+    command_args = ""
+    command_name = ""
+    if user_input.startswith("/"):
+        raw_command, _, command_args = user_input[1:].partition(" ")
+        resolved = resolve_command(raw_command)
+        command_name = resolved.name if resolved else raw_command.strip().lower()
+        command_args = command_args.strip()
+    if command_name == "subagent":
+        payload, error = parse_subagent_args(command_args)
+        if error:
+            return True, False, error
+        return True, False, await agent.run_tool("agent", payload)
+    if user_input.startswith("/resume "):
+        _, _, target = user_input.partition(" ")
+        session_id = _resolve_session_id(agent, target.strip())
+        if not session_id:
+            return True, False, "error: session not found"
+        await agent.resume_session_async(session_id)
+        return True, False, f"resumed session {session_id}"
+    if user_input == "/clear":
+        session_id = await agent.clear_session_async()
+        return True, False, f"new session {session_id}"
+    command, arguments = skillslib.parse_slash_command(user_input)
+    if command and command in agent.skills:
+        return True, False, await invoke_skill_async(agent, command, arguments)
+    return handle_repl_command(agent, user_input)
 
 #格式化当前模式状态
 def _format_mode_status(agent):
@@ -930,7 +962,6 @@ def main(argv=None):            #启动阶段最开始的起点，cli解析参�
     print(build_welcome(agent, model=model, host=host))
 
     if mode == "one_shot":
-        # one-shot 模式：只跑一次 ask，不进入 REPL 循环。
         try:
             prompt = _one_shot_prompt(args)
         except OSError as exc:
@@ -939,34 +970,135 @@ def main(argv=None):            #启动阶段最开始的起点，cli解析参�
         if prompt:
             print()
             try:
-                handled, _, output = handle_repl_command(agent, prompt)
-                print(output if handled else agent.ask(prompt))
+                return asyncio.run(_run_one_shot(agent, prompt))
             except RuntimeError as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
         return 0
-
-    while True:
-        # 交互模式：每次读取一条用户输入，交给同一个 agent，
-        # 因此 session history 和 working memory 会跨轮延续。
-        _drain_idle_worker_notifications(agent)
-        try:
-            user_input = input("\ngencode> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("")
-            return 0
-
-        if not user_input:
-            continue
-        handled, should_exit, output = handle_repl_command(agent, user_input)
-        if should_exit:
-            return 0
-        if handled:
-            print(output)
-            continue
-
+    try:
+        return asyncio.run(_run_repl(agent))
+    except KeyboardInterrupt:
         print()
+        return 0
+
+
+async def _run_one_shot(agent, prompt):
+    handled, _, output = await handle_repl_command_async(agent, prompt)
+    if handled:
+        print(output)
+    else:
+        await _consume_cli_turn(agent, prompt)
+    return 0
+
+
+async def _consume_cli_turn(agent, prompt, run_id=None, after_seq=0):
+    if not run_id:
+        run_id = await agent.engine.start_turn(prompt)
+    if not run_id:
+        return "", int(after_seq)
+    rendered_text = []
+    cursor = int(after_seq)
+    retries = 0
+    while True:
         try:
-            print(agent.ask(user_input))
-        except RuntimeError as exc:
-            print(str(exc), file=sys.stderr)
+            async for event in agent.engine.subscribe_turn(run_id, cursor):
+                cursor = max(cursor, int(event.get("run_seq", cursor) or cursor))
+                event_type = event.get("type")
+                if event_type == "text_delta":
+                    chunk = str(event.get("content", ""))
+                    sys.stdout.write(chunk)
+                    sys.stdout.flush()
+                    rendered_text.append(chunk)
+                elif event_type == "worker_event":
+                    nested = event.get("event") if isinstance(event.get("event"), dict) else {}
+                    if nested.get("type") == "text_delta":
+                        print(f"\n[{event.get('source', 'worker')}] {nested.get('content', '')}")
+                elif event_type in {"final", "stop"}:
+                    final_text = str(event.get("content", ""))
+                    streamed_text = "".join(rendered_text)
+                    if final_text and final_text not in streamed_text:
+                        if streamed_text:
+                            print()
+                        print(final_text)
+                    elif streamed_text:
+                        print()
+                    rendered_text.clear()
+                elif event_type in {"retry", "runtime_notice"}:
+                    print(str(event.get("content", "")))
+                if event_type == "turn_finished":
+                    return run_id, cursor
+            return run_id, cursor
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if agent.session_event_bus.is_completed(run_id):
+                return run_id, cursor
+            retries += 1
+            if retries > 3:
+                raise
+            await asyncio.sleep(0.05 * retries)
+
+
+async def _run_repl(agent):
+    inputs = asyncio.Queue()
+
+    async def read_input():
+        while True:
+            try:
+                value = await asyncio.to_thread(input, "\ngencode> ")
+            except (EOFError, KeyboardInterrupt):
+                await inputs.put(None)
+                return
+            await inputs.put(value.strip())
+
+    reader = asyncio.create_task(read_input())
+    active_turn = None
+    input_task = asyncio.create_task(inputs.get())
+    try:
+        while True:
+            wait_for = {input_task}
+            if active_turn is not None:
+                wait_for.add(active_turn)
+            done, _ = await asyncio.wait(wait_for, return_when=asyncio.FIRST_COMPLETED)
+            if active_turn is not None and active_turn in done:
+                try:
+                    await active_turn
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[Error] {exc}", file=sys.stderr)
+                active_turn = None
+                _drain_idle_worker_notifications(agent)
+            if input_task in done:
+                user_input = input_task.result()
+                if user_input is None:
+                    if active_turn is not None:
+                        agent.cancel_current_turn()
+                        await active_turn
+                    return 0
+                input_task = asyncio.create_task(inputs.get())
+                if not user_input:
+                    continue
+                if active_turn is not None:
+                    if user_input == "/cancel":
+                        accepted = agent.cancel_current_turn()
+                    elif user_input.startswith("/queue "):
+                        accepted = agent.queue_turn(user_input[7:].strip())
+                    else:
+                        message = user_input[7:].strip() if user_input.startswith("/steer ") else user_input
+                        accepted = agent.steer(message)
+                    if accepted:
+                        print("[control accepted]")
+                    else:
+                        print("[no active turn]")
+                    continue
+                if user_input.startswith("/"):
+                    handled, should_exit, output = await handle_repl_command_async(agent, user_input)
+                    if should_exit:
+                        return 0
+                    if handled:
+                        print(output)
+                        continue
+                active_turn = asyncio.create_task(_consume_cli_turn(agent, user_input))
+    finally:
+        if not reader.done():
+            reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)

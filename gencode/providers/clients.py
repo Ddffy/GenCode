@@ -5,15 +5,18 @@ runtime 只关心一件事：给我一个 prompt，我拿回一段文本。
 这些差异都在这里被抹平成统一的 complete() 接口。
 """
 
+import asyncio
 import json
 import socket
 import time
-from http.client import RemoteDisconnected
 import urllib.error
 import urllib.request
+from http.client import RemoteDisconnected
+
+import httpx
 
 from ..core.content_blocks import ensure_model_input
-from .base import ModelResult
+from .base import ModelResult, ModelStreamEvent
 from .errors import ProviderError, sanitize_url
 
 OPENAI_COMPATIBLE_USER_AGENT = "gencode/0.1"
@@ -102,6 +105,68 @@ def _extract_openai_tool_calls(data):
                     "args": _decode_tool_arguments(function.get("arguments", {})),
                 }
             )
+    return tuple(calls)
+
+
+def _openai_text_delta(event):
+    if event.get("type") == "response.output_text.delta":
+        return str(event.get("delta", "") or "")
+    choices = event.get("choices") or ()
+    if choices:
+        delta = (choices[0] or {}).get("delta") or {}
+        content = delta.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+    return ""
+
+
+def _collect_openai_tool_delta(event, collected):
+    event_type = str(event.get("type", ""))
+    if event_type == "response.output_item.added":
+        item = event.get("item") or {}
+        if item.get("type") == "function_call":
+            key = str(item.get("id") or item.get("call_id") or event.get("output_index", "0"))
+            collected[key] = {
+                "id": str(item.get("call_id") or item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "arguments": str(item.get("arguments") or ""),
+            }
+    elif event_type in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
+        key = str(event.get("item_id") or event.get("output_index", "0"))
+        item = collected.setdefault(key, {"id": "", "name": "", "arguments": ""})
+        if event_type.endswith(".delta"):
+            item["arguments"] += str(event.get("delta") or "")
+        else:
+            item["arguments"] = str(event.get("arguments") or item["arguments"])
+    for choice in event.get("choices") or ():
+        delta = (choice or {}).get("delta") or {}
+        for call in delta.get("tool_calls") or ():
+            index = str(call.get("index", 0))
+            item = collected.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            if call.get("id"):
+                item["id"] = str(call["id"])
+            function = call.get("function") or {}
+            item["name"] += str(function.get("name") or "")
+            item["arguments"] += str(function.get("arguments") or "")
+
+
+def _finish_openai_tool_deltas(collected):
+    calls = []
+    for item in collected.values():
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        calls.append({
+            "id": str(item.get("id", "")),
+            "name": name,
+            "args": _decode_tool_arguments(item.get("arguments", "")),
+        })
     return tuple(calls)
 
 
@@ -423,12 +488,7 @@ def _request_with_retries(provider, model, base_url, request, timeout, retry_bud
                 body_excerpt=body,
                 cause_type=type(exc).__name__,
             ) from exc
-        except (
-            urllib.error.URLError,
-            RemoteDisconnected,
-            TimeoutError,
-            socket.timeout,
-        ) as exc:
+        except (urllib.error.URLError, RemoteDisconnected, TimeoutError) as exc:
             retryable = True
             if attempt < attempts - 1:
                 retry_count += 1
@@ -524,7 +584,7 @@ def _provider_failure(
 
 
 class OpenAICompatibleModelClient:
-    def __init__(self, model, base_url, api_key, temperature, timeout):
+    def __init__(self, model, base_url, api_key, temperature, timeout, transport=None):
         self.model = model
         self.base_url = _normalize_versioned_base_url(base_url)
         self.api_key = api_key
@@ -537,6 +597,148 @@ class OpenAICompatibleModelClient:
         )
         self.supports_native_tool_calling = True
         self.last_completion_metadata = {}
+        self.transport = transport
+
+    async def stream_result(self, prompt, max_new_tokens, tools=None, **kwargs):
+        async for event in self._stream(
+            prompt, max_new_tokens, tools=tools, _return_messages=None, **kwargs
+        ):
+            yield event
+
+    async def stream_messages(self, messages, max_new_tokens, tools=None, **kwargs):
+        async for event in self._stream(
+            "", max_new_tokens, tools=tools, _return_messages=list(messages or ()), **kwargs
+        ):
+            yield event
+
+    async def _stream(self, prompt, max_new_tokens, tools=None, _return_messages=None, **kwargs):
+        prompt_cache_key = kwargs.get("prompt_cache_key")
+        prompt_cache_retention = kwargs.get("prompt_cache_retention")
+        self.last_completion_metadata = {}
+        if _return_messages is None:
+            content, image_input_count = _openai_input_content(prompt)
+            input_payload = [{"role": "user", "content": content}]
+            native_message_mode = False
+        else:
+            input_payload = _openai_messages_to_input(_return_messages)
+            image_input_count = 0
+            native_message_mode = True
+        payload = {
+            "model": self.model,
+            "input": input_payload,
+            "max_output_tokens": max_new_tokens,
+            "stream": True,
+        }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if tools:
+            payload["tools"] = _openai_native_tools(tools)
+            payload["tool_choice"] = "auto"
+        if self.supports_prompt_cache and prompt_cache_key:
+            payload["prompt_cache_key"] = prompt_cache_key
+        if self.supports_prompt_cache and prompt_cache_retention:
+            payload["prompt_cache_retention"] = prompt_cache_retention
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "User-Agent": OPENAI_COMPATIBLE_USER_AGENT,
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        text_parts = []
+        tool_deltas = {}
+        usage = {}
+        response_data = None
+        emitted = False
+        for attempt in range(3):
+            try:
+                timeout = httpx.Timeout(float(self.timeout))
+                async with (
+                    httpx.AsyncClient(timeout=timeout, transport=self.transport) as client,
+                    client.stream(
+                        "POST", self.base_url + "/responses", json=payload, headers=headers
+                    ) as response,
+                ):
+                        if response.status_code in RETRYABLE_HTTP_STATUS and attempt < 2:
+                            await response.aread()
+                            await asyncio.sleep(min(0.1 * (2 ** attempt), 1.0))
+                            continue
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            try:
+                                item = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            event_type = str(item.get("type", ""))
+                            delta = _openai_text_delta(item)
+                            if delta:
+                                text_parts.append(delta)
+                                emitted = True
+                                yield ModelStreamEvent("text_delta", delta)
+                            _collect_openai_tool_delta(item, tool_deltas)
+                            if item.get("usage"):
+                                usage.update(item["usage"])
+                            if event_type in {"response.completed", "response.done"}:
+                                response_data = item.get("response") or item
+                            elif item.get("choices"):
+                                choice = (item.get("choices") or [{}])[0]
+                                if choice.get("finish_reason") is not None:
+                                    response_data = item
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in RETRYABLE_HTTP_STATUS and attempt < 2 and not emitted:
+                    await asyncio.sleep(min(0.1 * (2 ** attempt), 1.0))
+                    continue
+                raise ProviderError(
+                    f"openai provider request failed with HTTP {exc.response.status_code}",
+                    provider="openai", model=self.model, base_url=self.base_url,
+                    code=_http_error_code(exc.response.status_code),
+                    http_status=exc.response.status_code,
+                    retryable=exc.response.status_code in RETRYABLE_HTTP_STATUS,
+                    attempts=attempt + 1, retry_count=attempt,
+                    cause_type=type(exc).__name__,
+                ) from exc
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt < 2 and not emitted:
+                    await asyncio.sleep(min(0.1 * (2 ** attempt), 1.0))
+                    continue
+                raise ProviderError(
+                    "openai provider stream failed",
+                    provider="openai", model=self.model, base_url=self.base_url,
+                    code="network_error", retryable=True,
+                    attempts=attempt + 1, retry_count=attempt,
+                    cause_type=type(exc).__name__,
+                ) from exc
+        if response_data is None:
+            response_data = {}
+        text = _extract_openai_text(response_data) or "".join(text_parts)
+        calls = _extract_openai_tool_calls(response_data)
+        if not calls:
+            calls = _finish_openai_tool_deltas(tool_deltas)
+        metadata = {
+            "prompt_cache_supported": self.supports_prompt_cache,
+            "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_retention": prompt_cache_retention,
+            "image_input_count": image_input_count,
+            **_provider_metadata("openai", self.model, self.base_url, attempt + 1, attempt),
+            **(_extract_usage_cache_details(response_data) if response_data else {}),
+            **(_extract_usage_cache_details({"usage": usage}) if usage else {}),
+            "native_tool_calling": bool(tools),
+            "native_tool_call_count": len(calls),
+            "native_message_mode": native_message_mode,
+            "native_message_count": len(input_payload),
+        }
+        self.last_completion_metadata = metadata
+        result = ModelResult(
+            text=text, metadata=metadata, tool_calls=calls,
+            stop_reason=str(response_data.get("stop_reason") or response_data.get("status") or ""),
+        )
+        yield ModelStreamEvent("completed", result=result)
 
     def complete_result(self, prompt, max_new_tokens, tools=None, **kwargs):
         return self.complete(
@@ -765,7 +967,7 @@ def _extract_anthropic_text(data):
 
 
 class AnthropicCompatibleModelClient:
-    def __init__(self, model, base_url, api_key, temperature, timeout):
+    def __init__(self, model, base_url, api_key, temperature, timeout, transport=None):
         self.model = model
         self.base_url = _normalize_versioned_base_url(base_url)
         self.api_key = api_key
@@ -774,6 +976,170 @@ class AnthropicCompatibleModelClient:
         self.supports_prompt_cache = False
         self.supports_native_tool_calling = True
         self.last_completion_metadata = {}
+        self.transport = transport
+
+    async def stream_result(self, prompt, max_new_tokens, tools=None, **kwargs):
+        async for event in self._stream(
+            prompt, max_new_tokens, tools=tools, _input_messages=None, **kwargs
+        ):
+            yield event
+
+    async def stream_messages(self, messages, max_new_tokens, tools=None, **kwargs):
+        async for event in self._stream(
+            "", max_new_tokens, tools=tools,
+            _input_messages=list(messages or ()), **kwargs
+        ):
+            yield event
+
+    async def _stream(self, prompt, max_new_tokens, tools=None, _input_messages=None, **kwargs):
+        del kwargs
+        self.last_completion_metadata = {}
+        if _input_messages is None:
+            content, image_input_count = _anthropic_input_content(prompt)
+            system_parts = []
+            input_messages = [{"role": "user", "content": content}]
+            native_message_mode = False
+        else:
+            system_parts, input_messages = _anthropic_messages_to_payload(_input_messages)
+            image_input_count = 0
+            native_message_mode = True
+        payload = {
+            "model": self.model,
+            "messages": input_messages,
+            "max_tokens": max_new_tokens,
+            "stream": True,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if tools:
+            payload["tools"] = _anthropic_native_tools(tools)
+            payload["tool_choice"] = {"type": "auto"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+        text_parts = []
+        blocks = {}
+        usage = {}
+        stop_reason = ""
+        message_started = False
+        message_stopped = False
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(float(self.timeout)), transport=self.transport
+            ) as client, client.stream(
+                "POST", self.base_url + "/messages", json=payload, headers=headers
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data:
+                        continue
+                    try:
+                        item = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    event_type = str(item.get("type", ""))
+                    if event_type == "message_start":
+                        message_started = True
+                        usage.update((item.get("message") or {}).get("usage") or {})
+                    elif event_type == "content_block_start":
+                        block = item.get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            blocks[int(item.get("index", 0))] = {
+                                "id": str(block.get("id", "")),
+                                "name": str(block.get("name", "")),
+                                "input": dict(block.get("input") or {}),
+                                "json": "",
+                            }
+                    elif event_type == "content_block_delta":
+                        delta = item.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            text = str(delta.get("text", "") or "")
+                            if text:
+                                text_parts.append(text)
+                                yield ModelStreamEvent("text_delta", text)
+                        elif delta.get("type") == "input_json_delta":
+                            blocks.setdefault(int(item.get("index", 0)), {
+                                "id": "", "name": "", "input": {}, "json": ""
+                            })["json"] += str(delta.get("partial_json", "") or "")
+                    elif event_type == "message_delta":
+                        delta = item.get("delta") or {}
+                        stop_reason = str(delta.get("stop_reason", "") or "")
+                        usage.update(item.get("usage") or {})
+                    elif event_type == "message_stop":
+                        message_stopped = True
+                        break
+                    elif event_type == "error":
+                        raise ProviderError(
+                            "anthropic provider stream returned an error",
+                            provider="anthropic", model=self.model,
+                            base_url=self.base_url, code="provider_error",
+                            retryable=False, attempts=1,
+                            body_excerpt=str(item.get("error", ""))[:500],
+                        )
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"anthropic provider request failed with HTTP {exc.response.status_code}",
+                provider="anthropic", model=self.model, base_url=self.base_url,
+                code=_http_error_code(exc.response.status_code),
+                http_status=exc.response.status_code,
+                retryable=exc.response.status_code in RETRYABLE_HTTP_STATUS,
+                attempts=1, cause_type=type(exc).__name__,
+            ) from exc
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise ProviderError(
+                "anthropic provider stream failed", provider="anthropic",
+                model=self.model, base_url=self.base_url, code="network_error",
+                retryable=True, attempts=1, cause_type=type(exc).__name__,
+            ) from exc
+        if not message_started or not message_stopped:
+            raise ProviderError(
+                "anthropic provider stream ended before message_stop",
+                provider="anthropic", model=self.model, base_url=self.base_url,
+                code="incomplete_stream", retryable=True, attempts=1,
+            )
+        calls = []
+        for block in blocks.values():
+            arguments = block["input"]
+            if block["json"]:
+                try:
+                    parsed = json.loads(block["json"])
+                except json.JSONDecodeError as exc:
+                    raise ProviderError(
+                        "anthropic tool arguments were incomplete",
+                        provider="anthropic", model=self.model,
+                        base_url=self.base_url, code="invalid_tool_arguments",
+                        retryable=False, attempts=1, cause_type=type(exc).__name__,
+                    ) from exc
+                arguments = parsed if isinstance(parsed, dict) else {}
+            calls.append({"id": block["id"], "name": block["name"], "args": arguments})
+        metadata = {
+            **_provider_metadata("anthropic", self.model, self.base_url, 1, 0),
+            "image_input_count": image_input_count,
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "cached_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+            "cache_hit": int(usage.get("cache_read_input_tokens", 0) or 0) > 0,
+            "native_tool_calling": bool(tools),
+            "native_tool_call_count": len(calls),
+            "native_message_mode": native_message_mode,
+            "native_message_count": len(input_messages),
+        }
+        self.last_completion_metadata = metadata
+        yield ModelStreamEvent(
+            "completed",
+            result=ModelResult(
+                text="".join(text_parts), metadata=metadata,
+                tool_calls=tuple(calls), stop_reason=stop_reason,
+            ),
+        )
 
     def complete_result(self, prompt, max_new_tokens, tools=None, **kwargs):
         return self.complete(

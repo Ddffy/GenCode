@@ -1,0 +1,236 @@
+URL: https://prachub.com/coding-questions/build-a-streaming-chat-input
+
+Build a Streaming Chat Input | OpenAI Coding Question PracHub Questions Experience Learning Guides Interview Prep 
+
+ Quick Overview
+ This question evaluates frontend engineering skills including streaming data handling, incremental token-by-token rendering, asynchronous state management, and preserving UI responsiveness during long-running API streams.
+ medium 
+ OpenAI 
+ Coding & Algorithms 
+ Frontend Engineer 
+
+ Build a Streaming Chat Input
+ Company: OpenAI
+ Role: Frontend Engineer
+ Category: Coding & Algorithms
+ Difficulty: medium
+ Interview Round: Technical Screen
+ Implement a minimal front-end chat interface, similar to a stripped-down AI assistant (think a bare-bones ChatGPT). The user types a prompt, submits it, and the assistant's reply **streams in token-by-token** below the input rather than appearing all at once.
+
+You are given an API endpoint that returns the assistant response as a **stream of text chunks** (the exact transport — `fetch` + `ReadableStream`, Server-Sent Events, or WebSocket — is up to you to assume and state). Your job is to build the component: its structure, its state management, and its incremental-render behavior.
+
+### Core Requirements
+
+1. Render a **text input** and a **submit button**.
+2. On submit, call the streaming API with the user's prompt.
+3. Render the streamed response below the input **as chunks arrive**, not after the full response completes.
+4. Keep the UI **responsive** while the stream is in progress (input is not frozen; the page does not jank).
+5. **Prevent or gracefully handle duplicate submissions** while a response is still streaming.
+6. Show basic **loading** and **error** states.
+
+### Constraints & Assumptions
+
+- Single-page component; no router, no global state library required (though you should be able to justify whether you'd reach for one).
+- The API contract is provided by the interviewer. Assume a single endpoint (e.g. `POST /api/chat` with a `{ prompt }` body and an `AbortSignal`) that returns the reply as a stream of text chunks and eventually completes or errors. The exact transport is yours to choose — state the contract shape you assume, and whether you wrap it in a helper (`streamChat(prompt, { signal })`) or consume the stream directly. Either is fine as long as it's explicit.
+- A response may consist of dozens to hundreds of small chunks arriving over a few seconds.
+- Target a modern evergreen browser; you may use the framework you're most fluent in (React is the common default for this role), but be ready to defend vanilla-JS or framework-specific choices.
+- No need for persistence, auth, markdown rendering, or multi-turn history unless you choose to add them — focus the core on the streaming render loop.
+
+```hint Where to start
+List the *distinct visible conditions* the UI can be in across the whole lifecycle (nothing yet, waiting, mid-stream, finished, failed). Decide how you'll represent "which condition am I in" before you touch the network — a clean representation will make each requirement (disable button, spinner, partial text, error) fall out of it. Mutually-exclusive booleans tend to drift into impossible combinations; is there a tighter shape?
+```
+```hint Consuming the stream
+A streaming `fetch` exposes the body as a reader you pull from in a loop until it's done. The bytes arrive as raw `Uint8Array`s, not strings. Think about what happens at a *chunk boundary*: a single emoji or CJK character is several bytes — what if those bytes land in two different reads? Convince yourself your byte-to-text conversion is safe across that boundary.
+```
+```hint Render performance & responsiveness
+If you push state on *every* arriving chunk, how many renders does a few-hundred-chunk response cost — and does that scale with response length? Is there a way to decouple "how fast chunks arrive" from "how often the UI repaints"? Separately, ask why the input doesn't freeze: what kind of work is the read loop actually doing on the main thread?
+```
+```hint Duplicate submissions & cancellation
+A "submit" while one response is in flight has two failure modes: a *second* request firing, and the *first* one never being stopped. What's the minimum that blocks the new submit at the UI level, and what handle would you need to keep around to actively stop the work already running (on a new submit, a Stop button, or unmount)? Make sure a deliberate stop doesn't look like a failure.
+```
+```hint Cleanup & races
+Two things can outlive the request that started them: a read loop after the component is gone, and a slow chunk from an old request arriving after a newer one began. Both end with "update some UI that no longer belongs to me." Is there a single piece of bookkeeping you can check after each `await` to tell whether *this* iteration still owns the current view?
+```
+
+### Clarifying Questions to Ask
+
+- What exactly is the streaming transport and chunk format — raw `fetch` body stream, SSE (`text/event-stream`), or WebSocket? Are chunks plain text or JSON-wrapped events with a terminal sentinel?
+- Should the user be able to **cancel/stop** an in-progress response, or only wait for it to finish?
+- Is this single-turn (one prompt → one reply) or do you want a scrolling **multi-turn transcript**?
+- What should happen to a half-streamed answer when an error occurs mid-stream — keep the partial text, discard it, or offer a retry?
+- Any accessibility requirements (screen-reader announcement of streaming text, focus management)?
+- Should typed input be preserved or cleared on submit, and should Enter submit?
+
+### What a Strong Answer Covers
+
+- **Explicit state model**: a small, named status enum plus prompt text and accumulated response; transitions that make illegal states unrepresentable.
+- **Correct stream consumption**: reader loop, reused `TextDecoder` with `stream: true`, append-as-you-go, clean handling of stream completion.
+- **Duplicate-submit protection**: button disabled during `streaming` and/or in-flight request aborted/ignored — not just a half-measure.
+- **Cancellation & cleanup**: `AbortController` wired to submit and unmount; no `setState`-after-unmount; no stale chunks bleeding across requests.
+- **Render performance**: a deliberate strategy to avoid per-token full re-renders (batching, refs, or scoped updates) and a note on why the main thread stays responsive.
+- **Error & loading UX**: visible loading indicator, an error path that preserves or clearly discards partial output, and ideally a retry.
+- **Communication**: states assumptions out loud, reasons about trade-offs, and proactively raises edge cases rather than waiting to be asked.
+
+### Follow-up Questions
+
+- How would you extend this to a **multi-turn conversation** with a scrolling transcript while keeping the streaming bubble performant?
+- The product wants a **Stop generating** button. Walk through the implementation and what state has to change.
+- A response can be thousands of tokens. How do you keep scroll position sensible (auto-scroll-to-bottom vs. "user scrolled up, don't yank them down")?
+- How would you make the streaming text **accessible** to screen-reader users, and how would you test the streaming behavior deterministically (mocking the chunk stream)?
+ Overview: This question evaluates frontend engineering skills including streaming data handling, incremental token-by-token rendering, asynchronous state management, and preserving UI responsiveness during long-running API streams.
+ Part 1: Core Single-Turn Streaming Chat State
+ You are implementing the state reducer for a minimal single-turn streaming chat input. The UI starts idle. A submit starts one assistant response, chunks append incrementally, completion marks success, and errors preserve the partial response. Duplicate submits while a response is loading or streaming must be ignored. Return a snapshot after every event so tests can verify incremental rendering behavior.
+ Constraints
+ 0 <= len(events) <= 100000
+ Total length of all prompt, chunk, and error strings <= 1000000
+ A submit with an empty or whitespace-only prompt is ignored
+ chunk, done, and error events are ignored unless a request is currently loading or streaming
+ Duplicate submit events while loading or streaming are ignored
+
+ Examples
+ Input: ([['submit', 'Hi'], ['chunk', 'Hel'], ['chunk', 'lo'], ['done']],)
+ Expected Output: ['loading|||false', 'streaming|Hel||false', 'streaming|Hello||false', 'success|Hello||true']
+ Explanation: The response is visible after each chunk, and the form becomes submittable again after done.
+
+ Input: ([['submit', 'A'], ['chunk', 'x'], ['submit', 'B'], ['chunk', 'y'], ['done']],)
+ Expected Output: ['loading|||false', 'streaming|x||false', 'streaming|x||false', 'streaming|xy||false', 'success|xy||true']
+ Explanation: The second submit is ignored because the first response is still streaming.
+
+ Hints
+ Model the lifecycle with one status value instead of several booleans; this prevents impossible states like loading and error at the same time.
+ Only two statuses are considered in-flight: loading and streaming. Most event rules become simple once you define that helper.
+
+ Part 2: Multi-Turn Streaming Transcript
+ Extend the single-turn reducer into a multi-turn transcript. Each accepted prompt appends a user message and an assistant placeholder. Streaming chunks append only to the current assistant message. Completion or error finalizes that assistant message, after which another prompt may be accepted. Duplicate submits during an active assistant stream must be ignored.
+ Constraints
+ 0 <= len(events) <= 100000
+ Total length of all text fields <= 1000000
+ Only one assistant message may be active at a time
+ Empty or whitespace-only prompts are ignored
+ If an error occurs, the partial assistant text is kept
+
+ Examples
+ Input: ([['submit', 'Hi'], ['chunk', 'Hello'], ['done'], ['submit', 'Bye'], ['chunk', 'See'], ['chunk', ' ya'], ['done']],)
+ Expected Output: ['user|sent|Hi', 'assistant|done|Hello', 'user|sent|Bye', 'assistant|done|See ya']
+ Explanation: Two complete turns are stored in order.
+
+ Input: ([['submit', 'A'], ['chunk', 'one'], ['submit', 'B'], ['done']],)
+ Expected Output: ['user|sent|A', 'assistant|done|one']
+ Explanation: Prompt B is ignored because assistant A is still streaming.
+
+ Hints
+ When a submit is accepted, append two transcript entries immediately: the user message and an empty assistant message.
+ Keep the index of the active assistant message; chunks, done, and error only affect that index.
+
+ Part 3: Stop Generating with Cancellation and Stale-Event Handling
+ Add cancellation to the streaming transcript model. Each accepted submit starts a new request with an auto-incrementing request id, beginning at 1. A Stop action cancels the active request and marks its assistant message stopped. Chunks, done events, and errors include a request id and must be ignored unless they belong to the currently active request. This models AbortController cleanup and prevents stale chunks from older requests from corrupting the current UI.
+ Constraints
+ 0 <= len(events) <= 100000
+ Total length of all text fields <= 1000000
+ Accepted submits receive request ids '1', '2', '3', ... in order
+ Submitting while a request is active is ignored
+ Stale chunk, done, and error events whose request id is not active are ignored
+ Calling stop while idle has no effect
+
+ Examples
+ Input: ([['submit', 'A'], ['chunk', '1', 'Hel'], ['stop'], ['chunk', '1', 'lo'], ['done', '1']],)
+ Expected Output: ['user|-|sent|A', 'assistant|1|stopped|Hel']
+ Explanation: Stop preserves the partial text. Later events for request 1 are ignored.
+
+ Input: ([['submit', 'A'], ['chunk', '1', 'H'], ['stop'], ['submit', 'B'], ['chunk', '1', ' stale'], ['chunk', '2', 'OK'], ['done', '2']],)
+ Expected Output: ['user|-|sent|A', 'assistant|1|stopped|H', 'user|-|sent|B', 'assistant|2|done|OK']
+ Explanation: A stale chunk from stopped request 1 cannot affect request 2.
+
+ Hints
+ Store both the active request id and the transcript index of its assistant message.
+ After every asynchronous boundary in a real UI, you would check whether the request id still matches; this simulation asks you to do the same for every stream event.
+
+ Part 4: Long Streaming Responses and Scroll Pinning
+ A streaming response can be very long. The chat should auto-scroll to the bottom only while the user is already near the bottom. If the user scrolls up, new content should not yank the viewport down. Simulate this scroll behavior for a transcript container whose content height grows over time.
+ Constraints
+ 1 <= viewport_height <= 1000000
+ 0 <= threshold <= 1000000
+ 0 <= initial_content_height <= 1000000
+ 0 <= len(event_types) = len(values) <= 100000
+ For append events, 0 <= added height <= 1000000
+ All scrollTop values are clamped to the valid range [0, max(0, content_height - viewport_height)]
+
+ Examples
+ Input: (100, 10, 200, 100, ['append', 'user_scroll', 'append', 'user_scroll', 'append'], [20, 50, 30, 150, 10])
+ Expected Output: [120, 50, 50, 150, 160]
+ Explanation: The viewport starts at bottom, auto-scrolls once, stops auto-scrolling after the user scrolls up, then resumes after the user scrolls back to bottom.
+
+ Input: (100, 15, 300, 185, ['append'], [20])
+ Expected Output: [220]
+ Explanation: The initial position is within 15 pixels of bottom, so it is considered pinned and auto-scrolls.
+
+ Hints
+ Track whether the user is pinned to the bottom. A user is pinned if bottom_scrollTop - current_scrollTop <= threshold.
+ For an append event, decide whether to auto-scroll based on whether the user was pinned before the append.
+
+ Part 5: Accessible Streaming Announcements with Deterministic Batching
+ Streaming every tiny token directly into a screen-reader live region can be noisy. Implement a deterministic batching policy for accessible announcements. Visual text updates immediately on every chunk, but screen-reader announcements are batched by a timer or flushed immediately when the stream finishes or errors.
+ Constraints
+ 0 <= len(times) = len(types) = len(texts) <= 100000
+ 0 <= times[i] <= 1000000000
+ times is sorted in nondecreasing order
+ 1 <= interval_ms <= 1000000000
+ Total length of all text fields <= 1000000
+ Before processing an event at time t, if a scheduled flush time is <= t, flush pending announcement text at the scheduled time
+ A done event flushes pending text immediately at its time
+ An error event flushes pending text immediately, then announces 'Error: <message>' at the same time
+
+ Examples
+ Input: ([0, 30, 120, 130], ['chunk', 'chunk', 'chunk', 'done'], ['Hel', 'lo', '!', ''], 100)
+ Expected Output: ['VISUAL|Hello!', 'ANNOUNCE|100|Hello', 'ANNOUNCE|130|!']
+ Explanation: The first two chunks are batched at time 100. The final chunk is flushed early by done.
+
+ Input: ([0, 50, 60], ['chunk', 'chunk', 'done'], ['A', 'B', ''], 100)
+ Expected Output: ['VISUAL|AB', 'ANNOUNCE|60|AB']
+ Explanation: Completion before the timer fires flushes the pending text immediately.
+
+ Hints
+ Separate visual state from announced state: visual text appends on every chunk, but announcements use a pending buffer.
+ Think of there being at most one scheduled timer. A chunk starts it if none exists; done or error cancels it after flushing.
+
+ Last updated: Jun 21, 2026 
+ Loading coding console...
+
+ PracHub Master your tech interviews with 10,000+ real questions from top companies.
+
+ Product
+ Questions 
+ Learning Tracks 
+ Interview Guides 
+ Resources 
+ Premium 
+ For Universities 
+
+ Browse
+ By Company 
+ By Role 
+ By Category 
+ Topic Hubs 
+ Interview Experiences 
+ SQL Questions 
+ AI Coding Questions 
+ Compare Platforms 
+ Discord Community 
+
+ Support
+ support@prachub.com 
+ (916) 541-4762 
+
+ Legal
+ Privacy Policy 
+ Terms of Service 
+ About Us 
+
+ © 2026 PracHub. All rights reserved.
+
+ Related Coding Questions
+ Simulate Plant Infection With Controlled Burning - OpenAI (hard) 
+ Simulate turn-based monster team battle - OpenAI (medium) 
+ Compute Prefix Matrix Products - OpenAI (hard) 
+ Simulate Infection Spread with Immunity and Recovery - OpenAI (medium) 
+ Generate Data Labeling Schedules - OpenAI (medium)

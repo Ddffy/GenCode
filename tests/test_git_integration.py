@@ -1,6 +1,8 @@
 import json
 import subprocess
 
+from conftest import run_tool
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.testing import ScriptedModelClient
 
@@ -34,8 +36,8 @@ def test_workspace_changes_are_committed_per_tool_and_failed_verification_is_und
     agent = _build_git_agent(tmp_path)
 
     assert agent.git.enabled is True
-    agent.run_tool("read_file", {"path": "sample.txt", "start": 1, "end": 1})
-    result = agent.run_tool(
+    run_tool(agent, "read_file", {"path": "sample.txt", "start": 1, "end": 1})
+    result = run_tool(agent,
         "write_file", {"path": "sample.txt", "content": "after\n"}
     )
 
@@ -47,7 +49,7 @@ def test_workspace_changes_are_committed_per_tool_and_failed_verification_is_und
     assert commit_sha
     assert _git(tmp_path, "rev-parse", "HEAD").stdout.strip() == commit_sha
 
-    failed = agent.run_tool(
+    failed = run_tool(agent,
         "run_shell", {"command": "python -m pytest -q", "timeout": 20}
     )
 
@@ -68,10 +70,10 @@ def test_workspace_changes_are_committed_per_tool_and_failed_verification_is_und
 
 def test_non_verification_shell_failure_does_not_undo_agent_commit(tmp_path):
     agent = _build_git_agent(tmp_path)
-    agent.run_tool("read_file", {"path": "sample.txt", "start": 1, "end": 1})
-    agent.run_tool("write_file", {"path": "sample.txt", "content": "after\n"})
+    run_tool(agent, "read_file", {"path": "sample.txt", "start": 1, "end": 1})
+    run_tool(agent, "write_file", {"path": "sample.txt", "content": "after\n"})
 
-    result = agent.run_tool(
+    result = run_tool(agent,
         "run_shell",
         {"command": 'python -c "import sys; sys.exit(1)"', "timeout": 20},
     )
@@ -88,8 +90,8 @@ def test_dirty_workspace_is_not_auto_reset(tmp_path):
     agent = _build_git_agent(tmp_path)
     (tmp_path / "sample.txt").write_text("user edit\n", encoding="utf-8")
 
-    agent.run_tool("read_file", {"path": "sample.txt", "start": 1, "end": 1})
-    result = agent.run_tool(
+    run_tool(agent, "read_file", {"path": "sample.txt", "start": 1, "end": 1})
+    result = run_tool(agent,
         "write_file", {"path": "sample.txt", "content": "agent edit\n"}
     )
 
@@ -102,8 +104,8 @@ def test_dirty_workspace_is_not_auto_reset(tmp_path):
 
 def test_manual_undo_can_find_the_latest_gencode_commit_after_runtime_restart(tmp_path):
     first = _build_git_agent(tmp_path)
-    first.run_tool("read_file", {"path": "sample.txt", "start": 1, "end": 1})
-    first.run_tool("write_file", {"path": "sample.txt", "content": "after\n"})
+    run_tool(first, "read_file", {"path": "sample.txt", "start": 1, "end": 1})
+    run_tool(first, "write_file", {"path": "sample.txt", "content": "after\n"})
 
     second = GenCode(
         model_client=ScriptedModelClient([]),

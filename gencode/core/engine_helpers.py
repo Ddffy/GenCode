@@ -5,9 +5,10 @@ keeps the turn loop shape visible. Terminal-state policy lives in
 completion_governance.
 """
 
+import asyncio
 import time
 
-from ..providers.base import complete_model
+from ..providers.base import complete_model_async, stream_model
 from ..providers.errors import ProviderError
 from .native_messages import build_native_messages
 from .parallel_tools import (
@@ -18,12 +19,26 @@ from .tool_execution import finalize_tool_call
 from .workspace import clip, now
 
 
+def _set_fast_read_only_qa(agent, enabled):
+    previous = getattr(agent, "_fast_read_only_qa_previous_tool_profile", None)
+    agent.fast_read_only_qa = bool(enabled)
+    if enabled and previous is None:
+        agent._fast_read_only_qa_previous_tool_profile = agent._active_tool_profile_name
+        agent.set_tool_profile("readonly")
+    elif not enabled and previous is not None:
+        agent.set_tool_profile(previous)
+        del agent._fast_read_only_qa_previous_tool_profile
+
+
 def complete_runtime_model(agent, prompt, user_message, max_new_tokens, tools=None, **kwargs):
     """Dispatch native-capable clients through structured messages."""
     messages = None
-    if tools and hasattr(agent.model_client, "complete_messages"):
+    if (
+        getattr(agent.model_client, "supports_native_tool_calling", False)
+        and hasattr(agent.model_client, "stream_messages")
+    ):
         messages = build_native_messages(agent, user_message, prompt=prompt)
-    return complete_model(
+    return stream_model(
         agent.model_client,
         prompt,
         max_new_tokens,
@@ -61,31 +76,41 @@ def handle_prompt_checkpoints(engine, task_state, user_message, prompt_metadata)
         create("context_reduction")
 
 
-def execute_tool_payload(engine, task_state, user_message, payload):
+async def execute_tool_payload(engine, task_state, user_message, payload):
     agent = engine.runtime
     tool_started_at, event = _start_tool_payload(agent, task_state, payload)
     yield event
 
-    tool_result = agent.run_tool(event["name"], event["args"])
+    tool_result = await agent.run_tool(event["name"], event["args"])
     tool_metadata = dict(agent._last_tool_result_metadata or {})
     tool_duration_ms = int((time.monotonic() - tool_started_at) * 1000)
-    yield from _finish_tool_payload(
+    for finished in _finish_tool_payload(
         engine, task_state, user_message, payload,
         tool_result, tool_metadata, tool_duration_ms,
-    )
+    ):
+        yield finished
 
 
-def execute_parallel_tool_payloads(engine, task_state, user_message, payloads):
+async def execute_parallel_tool_payloads(
+    engine, task_state, user_message, payloads, attempted
+):
     """Run raw safe reads concurrently and commit outcomes in source order."""
     agent = engine.runtime
     for payload in payloads:
         _tool_started_at, event = _start_tool_payload(
-            agent, task_state, payload, record_state=False
+            agent, task_state, payload, record_state=False, emit_started=False
         )
         yield event
 
-    raw_calls = execute_parallel_safe_tools(agent, payloads)
+    raw_calls = await execute_parallel_safe_tools(agent, payloads)
+    attempted[0] = sum(not item.skipped_reason for item in raw_calls)
     for payload, raw_call in zip(payloads, raw_calls):
+        if raw_call.skipped_reason:
+            for event in record_skipped_tool_call(
+                engine, task_state, payload, reason=raw_call.skipped_reason
+            ):
+                yield event
+            continue
         task_state.record_tool(payload.get("name", ""))
         finalize_started_at = time.monotonic()
         outcome = finalize_tool_call(
@@ -98,53 +123,70 @@ def execute_parallel_tool_payloads(engine, task_state, user_message, payloads):
         # Keep duration per call rather than charging later results for earlier
         # results' serialized history/checkpoint work.
         tool_duration_ms = raw_call.duration_ms + finalize_ms
-        yield from _finish_tool_payload(
+        for finished in _finish_tool_payload(
             engine, task_state, user_message, payload,
             outcome.content, outcome.metadata, tool_duration_ms,
-        )
+        ):
+            yield finished
 
 
-def execute_tool_batch(engine, task_state, user_message, payloads, *, tool_steps):
-    """Execute a model-emitted batch and return the attempted call count."""
+async def execute_tool_batch(
+    engine, task_state, user_message, payloads, *, tool_steps, step_budget, attempted
+):
     agent = engine.runtime
-    remaining_steps = max(0, agent.max_steps - tool_steps)
+    remaining_steps = max(0, step_budget - tool_steps)
     if can_parallelize_tool_batch(
         agent, payloads, remaining_steps=remaining_steps
     ):
-        yield from execute_parallel_tool_payloads(
-            engine, task_state, user_message, payloads
-        )
-        return len(payloads)
+        async for event in execute_parallel_tool_payloads(
+            engine, task_state, user_message, payloads, attempted
+        ):
+            yield event
+        return
 
     executed_tools = 0
-    for payload in payloads:
-        if tool_steps + executed_tools >= agent.max_steps or agent.abort_requested:
+    for index, payload in enumerate(payloads):
+        await engine._process_control_events()
+        if agent.pending_steer_message:
+            for skipped in payloads[index:]:
+                for event in record_skipped_tool_call(
+                    engine, task_state, skipped, reason="steered"
+                ):
+                    yield event
+            break
+        if tool_steps + executed_tools >= step_budget or agent.abort_requested:
             reason = (
                 "step_budget_exhausted"
-                if tool_steps + executed_tools >= agent.max_steps
+                if tool_steps + executed_tools >= step_budget
                 else "aborted"
             )
-            yield from record_skipped_tool_call(
+            for event in record_skipped_tool_call(
                 engine, task_state, payload, reason=reason
-            )
+            ):
+                yield event
             continue
-        yield from execute_tool_payload(
+        async for event in execute_tool_payload(
             engine, task_state, user_message, payload
-        )
+        ):
+            yield event
         executed_tools += 1
-    return executed_tools
+        await engine._process_control_events()
+    attempted[0] = executed_tools
 
 
-def _start_tool_payload(agent, task_state, payload, *, record_state=True):
+def _start_tool_payload(
+    agent, task_state, payload, *, record_state=True, emit_started=True
+):
     name = payload.get("name", "")
     args = payload.get("args", {})
     if record_state:
         task_state.record_tool(name)
     tool_started_at = time.monotonic()
-    agent.session_event_bus.emit(
-        "tool_started",
-        {"run_id": task_state.run_id, "tool_name": name, "args": args},
-    )
+    if emit_started:
+        agent.session_event_bus.emit(
+            "tool_started",
+            {"run_id": task_state.run_id, "tool_name": name, "args": args},
+        )
     return tool_started_at, {
         "type": "tool_call",
         "run_id": task_state.run_id,
@@ -295,26 +337,82 @@ def should_retry_model_error(exc, provider_retries):
 
 
 _STEP_LIMIT_SUMMARY_NOTICE = (
-    "You have hit the per-turn tool budget (max_steps). Do not call any more tools. "
-    "Right now, return a single <final>...</final> answer in the user's language that "
-    "briefly covers: (1) what you accomplished this turn, (2) what remains undone, "
-    "(3) how the user can continue (e.g., `/resume` then `继续`). Keep it concise."
+    "The read-only investigation budget for this turn is exhausted. Do not request or "
+    "call tools. Answer the original user request below now, in the user's language, "
+    "using the evidence already in the conversation. Keep the complete answer under "
+    "700 Chinese characters. Use five concise bullets covering the architecture, "
+    "creation/scheduling, runtime/state, result return, and continue/stop/failure; "
+    "include key files/functions. Do not repeat exploration history or narrate progress. "
+    "Mention only material uncertainty instead of guessing.\n\n"
+    "Original user request:\n"
 )
+STEP_LIMIT_SUMMARY_TIMEOUT_SECONDS = 6
 
 
-def request_step_limit_summary(engine, task_state, user_message):
-    """Ask the model to write a graceful step-limit summary.
+async def request_step_limit_summary(engine, task_state, user_message):
+    """Ask the model to finish from collected evidence without further tools.
 
-    Returns the final text, or None if the model fails or refuses to comply.
+    Returns final text, or None if the model requests another tool or fails.
     Side effects: emits a trace event but does NOT mutate session history —
     the caller decides whether to record the resulting final.
     """
     agent = engine.runtime
     started_at = time.monotonic()
+    native_mode = bool(
+        getattr(agent.model_client, "supports_native_tool_calling", False)
+        and hasattr(agent.model_client, "stream_messages")
+    )
     try:
-        prompt, _ = agent._build_prompt_and_metadata(_STEP_LIMIT_SUMMARY_NOTICE)
-        result = complete_model(agent.model_client, prompt, agent.max_new_tokens)
-    except Exception as exc:
+        protocol_notice = (
+            "For the legacy text protocol, wrap the answer in <final>...</final>.\n\n"
+            if not native_mode
+            else "For native tool calling, return ordinary answer text; do not use XML tags.\n\n"
+        )
+        summary_request = (
+            _STEP_LIMIT_SUMMARY_NOTICE + protocol_notice + str(user_message)
+        )
+        rendered_sections = dict(
+            getattr(
+                getattr(agent, "context_manager", None), "last_rendered_sections", {}
+            )
+            or {}
+        )
+        if not rendered_sections:
+            rendered_sections = {"prefix": str(getattr(agent, "prefix", ""))}
+        prompt = "\n\n".join(
+            str(rendered_sections.get(section, "") or "").strip()
+            for section in (
+                "prefix",
+                "memory",
+                "skills",
+                "relevant_memory",
+                "repo_map",
+                "history",
+            )
+            if str(rendered_sections.get(section, "") or "").strip()
+        )
+        prompt = f"{prompt}\n\n{summary_request}".strip()
+        messages = None
+        if native_mode:
+            messages = build_native_messages(
+                agent,
+                summary_request,
+                prompt=prompt,
+                max_history_items=40
+                if getattr(agent, "fast_read_only_qa", False)
+                else 16,
+            )
+        result = await asyncio.wait_for(
+            complete_model_async(
+                agent.model_client,
+                prompt,
+                min(int(agent.max_new_tokens), 700),
+                tools=None if native_mode else [],
+                messages=messages,
+            ),
+            timeout=STEP_LIMIT_SUMMARY_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # Summary generation is best-effort; preserve the task state.  # noqa: BLE001
         agent.emit_trace(
             task_state,
             "step_limit_summary_failed",
@@ -322,16 +420,27 @@ def request_step_limit_summary(engine, task_state, user_message):
         )
         return None
     raw = (result.text or "").strip() if result else ""
-    if (result.metadata or {}).get("native_tool_calling") and raw:
-        kind, payload = "final", raw
+    if native_mode and result and result.tool_calls:
+        kind, payload = "unexpected_native_tool_calls", None
+    elif native_mode and raw:
+        kind, payload = "native_final", raw
     else:
         kind, payload = agent.parse(raw)
     duration_ms = int((time.monotonic() - started_at) * 1000)
+    completion_metadata = dict(getattr(result, "metadata", {}) or {}) if result else {}
     agent.emit_trace(
         task_state,
         "step_limit_summary",
-        {"kind": kind, "duration_ms": duration_ms, "produced": bool(kind == "final")},
+        {
+            "kind": kind,
+            "duration_ms": duration_ms,
+            "produced": bool(kind in {"final", "native_final"} and payload),
+            "output_tokens": completion_metadata.get("output_tokens"),
+            "stop_reason": str(getattr(result, "stop_reason", "") or "")
+            if result
+            else "",
+        },
     )
-    if kind == "final" and payload:
+    if kind in {"final", "native_final"} and payload:
         return str(payload).strip()
     return None

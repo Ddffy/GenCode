@@ -1,9 +1,11 @@
+import asyncio
 import json
-import threading
-import time
 
-from gencode.testing import ScriptedModelClient
+from conftest import run_tool
+
 from gencode import GenCode, SessionStore, WorkspaceContext
+from gencode.providers.base import ModelResult, ModelStreamEvent
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs, **kwargs):
@@ -28,23 +30,25 @@ def read_jsonl(path):
 
 
 class BlockingModelClient:
-    def __init__(self, outputs, started, release):
+    def __init__(self, outputs):
         self.outputs = list(outputs)
-        self.started = started
-        self.release = release
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
         self.prompts = []
         self.supports_prompt_cache = False
         self.last_completion_metadata = {}
         self.abort_count = 0
 
-    def complete(self, prompt, max_new_tokens, **kwargs):
+    async def stream_result(self, prompt, max_new_tokens, **kwargs):
+        del max_new_tokens, kwargs
         self.prompts.append(prompt)
         self.started.set()
-        if not self.release.wait(timeout=5):
-            raise RuntimeError("blocking test client timed out")
+        await self.release.wait()
         if not self.outputs:
             raise RuntimeError("scripted model ran out of outputs")
-        return self.outputs.pop(0)
+        text = self.outputs.pop(0)
+        yield ModelStreamEvent("text_delta", text)
+        yield ModelStreamEvent("completed", result=ModelResult(text=text))
 
     def abort(self):
         self.abort_count += 1
@@ -62,143 +66,128 @@ def test_delegate_is_removed_from_runtime_tool_surface(tmp_path):
 
 
 def test_async_worker_notification_is_drained_by_coordinator_only(tmp_path):
-    started = threading.Event()
-    release = threading.Event()
-    child_client = BlockingModelClient(["<final>Child done.</final>"], started, release)
+    child_client = BlockingModelClient(["<final>Child done.</final>"])
     agent = build_agent(
         tmp_path,
         [],
         model_client_factory=lambda: child_client,
     )
 
-    before = time.monotonic()
-    payload = json.loads(
-        agent.run_tool(
-            "agent",
-            {
-                "description": "Background read",
-                "prompt": "Summarize README",
-                "subagent_type": "Explore",
-            },
+    async def run():
+        payload = json.loads(
+            await agent.run_tool(
+                "agent",
+                {
+                    "description": "Background read",
+                    "prompt": "Summarize README",
+                    "subagent_type": "Explore",
+                },
+            )
         )
-    )
+        assert payload["status"] == "started"
+        await asyncio.wait_for(child_client.started.wait(), 2)
+        assert not any(
+            "<task-notification>" in item.get("content", "")
+            for item in agent.session["history"]
+        )
+        child_client.release.set()
+        await agent.worker_manager.wait_idle()
+        drained = agent.engine.drain_worker_notifications()
+        assert len(drained) == 1
+        assert "<task-id>agent_1</task-id>" in drained[0]
+        assert any(
+            "<task-notification>" in item.get("content", "")
+            for item in agent.session["history"]
+        )
+        assert agent.engine.drain_worker_notifications() == []
+        assert agent.worker_manager.to_dict()["items"][0]["notification_drained"] is True
 
-    assert payload["status"] == "started"
-    startup_limit = 1.0 if __import__("os").name == "nt" else 0.5
-    assert time.monotonic() - before < startup_limit
-    assert started.wait(timeout=1)
-    assert not any(
-        "<task-notification>" in item.get("content", "")
-        for item in agent.session["history"]
-    )
-
-    release.set()
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if agent.worker_manager.to_dict()["items"][0]["status"] == "completed":
-            break
-        time.sleep(0.01)
-
-    drained = agent.engine.drain_worker_notifications()
-
-    assert len(drained) == 1
-    assert "<task-id>agent_1</task-id>" in drained[0]
-    assert any(
-        "<task-notification>" in item.get("content", "")
-        for item in agent.session["history"]
-    )
-    assert agent.engine.drain_worker_notifications() == []
-    assert agent.worker_manager.to_dict()["items"][0]["notification_drained"] is True
+    asyncio.run(run())
 
 
 def test_send_message_rejects_running_worker(tmp_path):
-    started = threading.Event()
-    release = threading.Event()
+    child_client = BlockingModelClient(["<final>Child done.</final>"])
     agent = build_agent(
         tmp_path,
         [],
-        model_client_factory=lambda: BlockingModelClient(
-            ["<final>Child done.</final>"], started, release
-        ),
+        model_client_factory=lambda: child_client,
     )
 
-    agent.run_tool(
-        "agent",
-        {
-            "description": "Still running",
-            "prompt": "Wait for release",
-            "subagent_type": "Explore",
-        },
-    )
-    assert started.wait(timeout=1)
+    async def run():
+        await agent.run_tool(
+            "agent",
+            {
+                "description": "Still running",
+                "prompt": "Wait for release",
+                "subagent_type": "Explore",
+            },
+        )
+        await asyncio.wait_for(child_client.started.wait(), 2)
+        rejected = await agent.run_tool(
+            "send_message", {"to": "agent_1", "message": "Continue now"}
+        )
+        child_client.release.set()
+        await agent.worker_manager.wait_idle()
+        assert "worker is running" in rejected
 
-    rejected = agent.run_tool(
-        "send_message", {"to": "agent_1", "message": "Continue now"}
-    )
-
-    release.set()
-    assert "worker is running" in rejected
+    asyncio.run(run())
 
 
 def test_task_stop_requests_child_runtime_abort(tmp_path):
-    started = threading.Event()
-    release = threading.Event()
-    child_client = BlockingModelClient(["<final>Child done.</final>"], started, release)
+    child_client = BlockingModelClient(["<final>Child done.</final>"])
     agent = build_agent(
         tmp_path,
         [],
         model_client_factory=lambda: child_client,
     )
 
-    agent.run_tool(
-        "agent",
-        {
-            "description": "Abort me",
-            "prompt": "Wait until stopped",
-            "subagent_type": "Explore",
-        },
-    )
-    assert started.wait(timeout=1)
+    async def run():
+        await agent.run_tool(
+            "agent",
+            {
+                "description": "Abort me",
+                "prompt": "Wait until stopped",
+                "subagent_type": "Explore",
+            },
+        )
+        await asyncio.wait_for(child_client.started.wait(), 2)
+        payload = json.loads(
+            await agent.run_tool("task_stop", {"task_id": "agent_1"})
+        )
+        assert payload["status"] == "stopping"
+        await asyncio.wait_for(agent.worker_manager.wait_idle(), 3)
+        assert child_client.abort_count == 1
+        assert agent.worker_manager.to_dict()["items"][0]["status"] == "stopped"
 
-    payload = json.loads(agent.run_tool("task_stop", {"task_id": "agent_1"}))
-
-    assert payload["status"] == "stopping"
-    assert child_client.abort_count == 1
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if agent.worker_manager.to_dict()["items"][0]["status"] == "stopped":
-            break
-        time.sleep(0.01)
-    assert agent.worker_manager.to_dict()["items"][0]["status"] == "stopped"
+    asyncio.run(run())
 
 
 def test_clear_session_stops_running_background_workers(tmp_path):
-    started = threading.Event()
-    release = threading.Event()
-    child_client = BlockingModelClient(["<final>Child done.</final>"], started, release)
+    child_client = BlockingModelClient(["<final>Child done.</final>"])
     agent = build_agent(
         tmp_path,
         [],
         model_client_factory=lambda: child_client,
     )
 
-    agent.run_tool(
-        "agent",
-        {
-            "description": "Clear me",
-            "prompt": "Wait until clear",
-            "subagent_type": "Explore",
-        },
-    )
-    assert started.wait(timeout=1)
-    old_id = agent.session["id"]
+    async def run():
+        await agent.run_tool(
+            "agent",
+            {
+                "description": "Clear me",
+                "prompt": "Wait until clear",
+                "subagent_type": "Explore",
+            },
+        )
+        await asyncio.wait_for(child_client.started.wait(), 2)
+        old_id = agent.session["id"]
+        new_id = await agent.clear_session_async()
+        assert new_id != old_id
+        assert child_client.abort_count == 1
+        assert agent.worker_manager.to_dict()["items"] == []
+        assert agent.engine.drain_worker_notifications() == []
 
-    new_id = agent.clear_session()
-
-    assert new_id != old_id
-    assert child_client.abort_count == 1
-    assert agent.worker_manager.to_dict()["items"] == []
-    assert agent.engine.drain_worker_notifications() == []
+    asyncio.run(run())
 
 
 def test_explore_agent_runs_real_readonly_child_session_and_records_notification(
@@ -228,6 +217,13 @@ def test_explore_agent_runs_real_readonly_child_session_and_records_notification
     assert "README says demo readme." in notifications[0]["content"]
 
     events = read_jsonl(agent.session_event_bus.path)
+    run_id = agent.current_task_state.run_id
+    run_events = [event for event in events if event.get("run_id") == run_id]
+    worker_events = [event for event in run_events if event.get("source") == "agent_1"]
+    assert any(event["event"] == "worker_started" for event in worker_events)
+    assert any(event["event"] == "worker_event" for event in worker_events)
+    run_sequences = [event["run_seq"] for event in run_events]
+    assert run_sequences == sorted(set(run_sequences))
     assert any(
         event["event"] == "worker_started" and event["worker_id"] == "agent_1"
         for event in events
@@ -340,7 +336,7 @@ def test_plan_mode_cannot_continue_write_capable_worker(tmp_path):
     assert agent.ask("create a worker") == "Coordinator done."
     agent.enter_plan_mode("gate7")
 
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "send_message", {"to": "agent_1", "message": "Write notes/out.txt"}
     )
 
@@ -362,7 +358,7 @@ def test_plan_mode_allows_only_explore_agents(tmp_path):
     )
 
     agent.enter_plan_mode("gate7")
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "agent",
         {
             "description": "Write from plan",

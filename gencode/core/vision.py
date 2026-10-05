@@ -2,26 +2,46 @@
 
 from __future__ import annotations
 
-import queue
-import threading
+import asyncio
 
-from ..providers.base import complete_model
+from ..providers.base import stream_model
 from .content_blocks import ModelInput
 from .media import load_workspace_image
 
 
-def inspect_image_with_model(agent, path, question, profile="general", output_schema=""):
+async def complete_model_with_timeout(model_client, model_input, max_new_tokens):
+    timeout = float(getattr(model_client, "timeout", 60))
+
+    async def collect_result():
+        result = None
+        async for event in stream_model(model_client, model_input, max_new_tokens):
+            if event.type == "completed":
+                result = event.result
+        if result is None:
+            raise RuntimeError("vision provider stream ended without a completion")
+        return result
+
+    try:
+        return await asyncio.wait_for(collect_result(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"vision provider request exceeded {timeout}s") from exc
+
+
+async def inspect_image_with_model(agent, path, question, profile="general", output_schema=""):
     loaded = load_workspace_image(agent, path)
     prompt = image_inspection_prompt(
         loaded.metadata["path"], question, profile, output_schema
     )
     model_input = ModelInput(text=prompt, images=[loaded.block])
     model_client = agent.model_client_router.client_for_input(model_input)
-    result = complete_model_with_timeout(
-        model_client,
-        model_input,
-        agent.max_new_tokens,
-    )
+    result = None
+    async for event in stream_model(
+        model_client, model_input, agent.max_new_tokens
+    ):
+        if event.type == "completed":
+            result = event.result
+    if result is None:
+        raise RuntimeError("vision provider stream ended without a completion")
     media_ref = dict(loaded.metadata)
     task_state = getattr(agent, "current_task_state", None)
     if task_state is not None:
@@ -43,29 +63,6 @@ def inspect_image_with_model(agent, path, question, profile="general", output_sc
         f"profile: {profile or 'general'}\n"
         f"summary:\n{result.text}"
     )
-
-
-def complete_model_with_timeout(model_client, model_input, max_new_tokens):
-    timeout = getattr(model_client, "timeout", None)
-    if not timeout:
-        return complete_model(model_client, model_input, max_new_tokens)
-    results = queue.Queue(maxsize=1)
-
-    def worker():
-        try:
-            results.put((complete_model(model_client, model_input, max_new_tokens), None))
-        except Exception as exc:  # pragma: no cover - exercised through caller paths
-            results.put((None, exc))
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    try:
-        result, error = results.get(timeout=float(timeout))
-    except queue.Empty as exc:
-        raise TimeoutError(f"vision provider request exceeded {timeout}s") from exc
-    if error is not None:
-        raise error
-    return result
 
 
 def image_inspection_prompt(path, question, profile, output_schema):

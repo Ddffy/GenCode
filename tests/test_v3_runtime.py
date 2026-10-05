@@ -1,7 +1,9 @@
 import json
 
-from gencode.testing import ScriptedModelClient
+from conftest import run_tool
+
 from gencode import Engine, GenCode, SessionEventBus, SessionStore, WorkspaceContext
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs, **kwargs):
@@ -49,11 +51,14 @@ def test_engine_drives_real_session_and_persists_event_timeline(tmp_path):
         "session_started",
         "turn_started",
         "user_message",
+        "context_building",
         "context_orchestrator_decision",
         "context_usage_recorded",
         "model_requested",
+        "text_delta",
         "model_parsed",
         "assistant_message",
+        "final",
         "turn_finished",
     ]
 
@@ -95,7 +100,7 @@ def test_plan_mode_allows_only_the_active_plan_artifact_until_plan_is_written(tm
 
     assert plan_path == ".gencode/plans/v3-plan.md"
     assert agent.runtime_mode == "plan"
-    rejected = agent.run_tool(
+    rejected = run_tool(agent,
         "write_file", {"path": "src.py", "content": "print('no')\n"}
     )
     assert "plan mode" in rejected
@@ -137,14 +142,14 @@ def test_plan_mode_rejects_final_before_the_plan_artifact_exists(tmp_path):
 def test_plan_mode_tools_enter_and_exit_runtime_mode(tmp_path):
     agent = build_agent(tmp_path, [])
 
-    entered = agent.run_tool("enter_plan_mode", {"topic": "Refactor Auth"})
+    entered = run_tool(agent, "enter_plan_mode", {"topic": "Refactor Auth"})
 
     assert "mode: plan" in entered
     assert ".gencode/plans/refactor-auth-plan.md" in entered
     assert agent.runtime_mode == "plan"
     assert agent.active_tool_profile.name == "plan"
 
-    exited = agent.run_tool("exit_plan_mode", {})
+    exited = run_tool(agent, "exit_plan_mode", {})
 
     assert exited == "mode: default"
     assert agent.runtime_mode == "default"

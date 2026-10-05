@@ -7,6 +7,7 @@ files, so recovery state and review evidence stay separate.
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 
 
@@ -20,6 +21,7 @@ class RunStore:
     def __init__(self, root):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._json_write_lock = threading.RLock()
 
     def run_dir(self, run_id):
         return self.root / _run_id(run_id)
@@ -47,7 +49,8 @@ class RunStore:
     def write_task_state(self, task_state):
         path = self.task_state_path(task_state)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_json_atomic(path, task_state.to_dict())
+        with self._json_write_lock:
+            self._write_json_atomic(path, task_state.to_dict())
         return path
 
     def append_trace(self, task_state, event):
@@ -86,7 +89,8 @@ class RunStore:
     def write_report(self, task_state, report):
         path = self.report_path(task_state)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._write_json_atomic(path, report)
+        with self._json_write_lock:
+            self._write_json_atomic(path, report)
         return path
 
     def load_task_state(self, task_id):

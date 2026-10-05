@@ -134,6 +134,35 @@ def test_status_bar_shows_runtime_identity(tmp_path):
     assert "session" in text
 
 
+def test_status_bar_shows_resolved_provider_and_model():
+    from types import SimpleNamespace
+
+    from gencode.config import ProviderConfig
+    from gencode.providers.runtime import model_client_from_config
+    from gencode.tui.widgets import StatusBar
+
+    client = model_client_from_config(
+        ProviderConfig(
+            name="deepseek",
+            protocol="anthropic",
+            api_key="",
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-v4-flash",
+        ),
+        SimpleNamespace(temperature=0.2, openai_timeout=30),
+    )
+    agent = SimpleNamespace(
+        model_client=client,
+        runtime_mode="default",
+        session={"id": "session-1234567890"},
+    )
+    status = StatusBar()
+
+    status.update_agent(agent)
+
+    assert "model deepseek/deepseek-v4-flash" in rendered_text(status)
+
+
 def test_status_bar_reads_context_usage_governance_fields():
     from gencode.tui.widgets import StatusBar
 
@@ -373,6 +402,84 @@ async def test_tui_starts_new_assistant_message_after_tool_call(tmp_path, monkey
         ]
         assert timeline.index(messages[0]) < timeline.index(tool_card)
         assert timeline.index(tool_card) < timeline.index(messages[1])
+
+
+@pytest.mark.asyncio
+async def test_tui_long_stream_updates_message_and_shows_final_lines(tmp_path, monkeypatch):
+    import asyncio
+    import re
+    from html import unescape
+
+    from gencode.tui.app import GenCodeTuiApp
+    from gencode.tui.widgets import AssistantMessage
+
+    app = GenCodeTuiApp(build_agent(tmp_path, []))
+    lines = [f"Line {index}: explanation" for index in range(40)]
+    answer = "\n\n".join([*lines, "FINAL ANSWER MARKER"])
+    events = [
+        {"type": "text_delta", "content": lines[0]},
+        *(
+            {"type": "text_delta", "content": answer[start : start + 25]}
+            for start in range(len(lines[0]), len(answer), 25)
+        ),
+        {"type": "final", "content": answer},
+        {"type": "turn_finished"},
+    ]
+
+    async def subscribe_turn(run_id, after_seq=0):
+        for seq, event in enumerate(events[after_seq:], start=after_seq + 1):
+            yield {**event, "run_seq": seq}
+            if seq == 1:
+                await asyncio.sleep(0.1)
+
+    monkeypatch.setattr(app.agent.engine, "subscribe_turn", subscribe_turn)
+
+    async with app.run_test(size=(90, 24)) as pilot:
+        app._hide_welcome_banner()
+        await app._agent_task("", run_id="test-run")
+        await pilot.pause(delay=0.1)
+
+        assert app.query_one(AssistantMessage).content == answer
+        svg = app.export_screenshot()
+        visible = " ".join(
+            unescape(part) for part in re.findall(r"<text[^>]*>(.*?)</text>", svg)
+        ).replace("\xa0", " ")
+        assert "FINAL ANSWER MARKER" in visible
+
+
+@pytest.mark.asyncio
+async def test_tui_resubscribes_from_last_run_sequence_after_stream_drop(
+    tmp_path, monkeypatch
+):
+    from gencode.tui.app import GenCodeTuiApp
+    from gencode.tui.widgets import InputBar
+
+    agent = build_agent(tmp_path, ["<final>Recovered after reconnect.</final>"])
+    original_subscribe = agent.engine.subscribe_turn
+    cursors = []
+
+    async def flaky_subscribe(run_id, after_seq=0):
+        cursors.append(after_seq)
+        stream = original_subscribe(run_id, after_seq)
+        if len(cursors) == 1:
+            yield await anext(stream)
+            await stream.aclose()
+            raise ConnectionError("temporary UI stream disconnect")
+        async for event in stream:
+            yield event
+
+    monkeypatch.setattr(agent.engine, "subscribe_turn", flaky_subscribe)
+    app = GenCodeTuiApp(agent)
+
+    async with app.run_test() as pilot:
+        bar = app.query_one(InputBar)
+        bar.input.value = "finish after reconnect"
+        await pilot.press("enter")
+        text = await wait_for_assistant(app, pilot, "Recovered after reconnect.")
+
+        assert "Recovered after reconnect." in text
+        assert len(cursors) >= 2
+        assert cursors[1] == 1
 
 
 @pytest.mark.asyncio

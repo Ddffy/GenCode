@@ -1,9 +1,8 @@
 """工具定义、参数校验与执行。"""
 
-import os
+import asyncio
 import shutil
 import subprocess
-import textwrap
 from functools import partial
 
 from pydantic import ValidationError
@@ -53,6 +52,7 @@ from .schemas import (
     WriteFileArgs,
     first_error_message,
 )
+from .shell import tool_run_shell_async
 from .todos import (
     TODO_TOOL_EXAMPLES,
     TODO_TOOL_SPECS,
@@ -148,12 +148,62 @@ def build_tool_registry(agent):
             schema=spec["schema"],
             description=spec["description"],
             risky=bool(spec["risky"]),
-            runner=partial(_TOOL_RUNNERS[name], agent),
+            runner=partial(_async_tool_runner, name, agent),
             capability=spec.get("capability", ToolCapability()),
         )
         for name, spec in BASE_TOOL_SPECS.items()
     }
     return tools
+
+
+async def _async_tool_runner(name, agent, args):
+    if name == "run_shell":
+        return await tool_run_shell_async(agent, args)
+    if name == "agent":
+        return dumps_agent_payload(await agent.worker_manager.spawn(
+            args["description"], args["prompt"],
+            subagent_type=args.get("subagent_type", "worker"),
+            write_scope=args.get("write_scope", []),
+        ))
+    if name == "send_message":
+        return dumps_agent_payload(await agent.worker_manager.continue_task(
+            args["to"], args["message"]
+        ))
+    if name == "task_stop":
+        return dumps_agent_payload(await agent.worker_manager.stop_task(args["task_id"]))
+    if name == "ask_user":
+        return await agent.ask_user_async(
+            str(args["question"]), choices=args.get("choices", []) or []
+        )
+    if name == "inspect_image":
+        return await media_tools.tool_inspect_image_async(agent, args)
+    if name in {"todo_add", "todo_update", "todo_list", "enter_plan_mode", "exit_plan_mode"}:
+        return _TOOL_RUNNERS[name](agent, args)
+    task = asyncio.create_task(asyncio.to_thread(_TOOL_RUNNERS[name], agent, args))
+    tool = agent.tools.get(name)
+    cancellable_read = bool(
+        tool is not None
+        and tool.read_only
+        and tool.capability.effect is ToolEffect.READ
+    )
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if cancellable_read:
+            task.add_done_callback(_consume_task_exception)
+        else:
+            await task
+        raise
+
+
+def _consume_task_exception(task):
+    if not task.cancelled():
+        task.exception()
+
+
+def dumps_agent_payload(payload):
+    import json
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
 def build_native_tool_definitions(agent):
@@ -259,7 +309,8 @@ def tool_read_file(agent, args):
     if not path.is_file():
         raise ValueError("path is not a file")
     start = int(args.get("start", 1))
-    end = int(args.get("end", 200))
+    default_end = 80 if getattr(agent, "fast_read_only_qa", False) else 200
+    end = int(args.get("end", default_end))
     if start < 1 or end < start:
         raise ValueError("invalid line range")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -315,47 +366,6 @@ def tool_search(agent, args):
     return "\n".join(matches) or "(no matches)"
 
 
-def tool_run_shell(agent, args):
-    command = str(args.get("command", "")).strip()
-    if not command:
-        raise ValueError("command must not be empty")
-    timeout = int(args.get("timeout", 20))
-    if timeout < 1 or timeout > 120:
-        raise ValueError("timeout must be in [1, 120]")
-    runner = getattr(agent, "sandbox_runner", None)
-    if runner is None:
-        kwargs = {
-            "cwd": agent.root,
-            "shell": True,
-            "capture_output": True,
-            "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
-            "timeout": timeout,
-            "env": agent.shell_env(),
-            "check": False,
-        }
-        if os.name == "nt":
-            kwargs["executable"] = os.environ.get("COMSPEC") or r"C:\Windows\System32\cmd.exe"
-        result = subprocess.run(command, **kwargs)
-    else:
-        result = runner.run(
-            command,
-            cwd=agent.root,
-            env=agent.shell_env(),
-            timeout=timeout,
-        )
-    return textwrap.dedent(
-        f"""\
-        exit_code: {result.returncode}
-        stdout:
-        {result.stdout.strip() or "(empty)"}
-        stderr:
-        {result.stderr.strip() or "(empty)"}
-        """
-    ).strip()
-
-
 def tool_write_file(agent, args):
     path = agent.path(args["path"])
     content = str(args["content"])
@@ -387,7 +397,6 @@ _TOOL_RUNNERS = {
     "search": tool_search,
     "knowledge_read": knowledge_tools.read_wiki,
     "knowledge_propose": knowledge_tools.run,
-    "run_shell": tool_run_shell,
     "write_file": tool_write_file,
     "patch_file": tool_patch_file,
     "todo_add": tool_todo_add,

@@ -1,5 +1,7 @@
 import json
 
+from conftest import collect_events
+
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.testing import ScriptedModelClient
 
@@ -21,7 +23,7 @@ def read_jsonl(path):
 def test_real_turn_emits_context_orchestrator_decision_and_report_metadata(tmp_path):
     agent = build_agent(tmp_path, ["<final>done</final>"])
 
-    list(agent.engine.run_turn("summarize context"))
+    collect_events(agent.engine.run_turn("summarize context"))
 
     trace = read_jsonl(agent.current_run_dir / "trace.jsonl")
     trace_events = [event["event"] for event in trace]
@@ -70,7 +72,7 @@ Continue after compaction.
         agent.record({"role": "user", "content": f"request {index} " + ("x" * 900)})
         agent.record({"role": "assistant", "content": f"answer {index} " + ("y" * 900)})
 
-    list(agent.engine.run_turn("finish"))
+    collect_events(agent.engine.run_turn("finish"))
 
     report = json.loads((agent.current_run_dir / "report.json").read_text(encoding="utf-8"))
     orchestrator = report["prompt_metadata"]["context_orchestrator"]

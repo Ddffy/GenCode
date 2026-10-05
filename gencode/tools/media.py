@@ -29,8 +29,8 @@ def validate_media_runtime(agent, name, args):
             raise ValueError("path is not a file")
 
 
-def tool_inspect_image(agent, args):
-    return vision.inspect_image_with_model(
+async def tool_inspect_image_async(agent, args):
+    return await vision.inspect_image_with_model(
         agent,
         args["path"],
         args["question"],
@@ -40,5 +40,5 @@ def tool_inspect_image(agent, args):
 
 
 MEDIA_TOOL_RUNNERS = {
-    "inspect_image": tool_inspect_image,
+    "inspect_image": tool_inspect_image_async,
 }

@@ -1,6 +1,6 @@
 """Testing helpers for deterministic GenCode runtime checks."""
 
-from .providers.base import ModelResult
+from .providers.base import ModelResult, ModelStreamEvent
 
 
 class ScriptedModelClient:
@@ -26,6 +26,12 @@ class ScriptedModelClient:
             text=self.complete(prompt, max_new_tokens, **kwargs),
             metadata=dict(self.last_completion_metadata),
         )
+
+    async def stream_result(self, prompt, max_new_tokens, **kwargs):
+        result = self.complete_result(prompt, max_new_tokens, **kwargs)
+        for offset in range(0, len(result.text), 128):
+            yield ModelStreamEvent("text_delta", result.text[offset : offset + 128])
+        yield ModelStreamEvent("completed", result=result)
 
 
 class NativeScriptedModelClient:
@@ -62,3 +68,9 @@ class NativeScriptedModelClient:
             text=str(output),
             metadata={"native_tool_calling": True},
         )
+
+    async def stream_messages(self, messages, max_new_tokens, tools=None, **kwargs):
+        result = self.complete_messages(messages, max_new_tokens, tools, **kwargs)
+        for offset in range(0, len(result.text), 128):
+            yield ModelStreamEvent("text_delta", result.text[offset : offset + 128])
+        yield ModelStreamEvent("completed", result=result)

@@ -62,15 +62,6 @@ def finish_model_error(engine, task_state, user_message, prompt_metadata, exc, d
             "run_duration_ms": run_duration_ms,
         },
     )
-    agent.session_event_bus.emit(
-        "turn_finished",
-        {
-            "run_id": task_state.run_id,
-            "status": task_state.status,
-            "stop_reason": task_state.stop_reason,
-            "duration_ms": run_duration_ms,
-        },
-    )
     agent.run_store.write_report(task_state, agent.redact_artifact(agent.build_report(task_state)))
     agent.current_turn_id = ""
     agent.current_run_id = ""

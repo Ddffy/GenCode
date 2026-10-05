@@ -7,14 +7,16 @@ class RetrievalRouter:
     def __init__(self, *, code_rag_file_threshold=1000):
         self.code_rag_file_threshold = max(1, int(code_rag_file_threshold))
 
-    def route(self, *, source_type, corpus_size=0, lexical_confidence=0.0):
+    def route(
+        self, *, source_type, corpus_size=0, lexical_confidence=0.0, force_hybrid=False
+    ):
         kind = str(source_type or "").casefold()
         if kind == "spec":
             return {"strategy": "explicit_binding", "channels": ()}
         if kind == "skill":
             return {"strategy": "metadata_trigger", "channels": ()}
         if kind == "code":
-            if int(corpus_size) < self.code_rag_file_threshold:
+            if int(corpus_size) < self.code_rag_file_threshold and not force_hybrid:
                 return {"strategy": "repo_map", "channels": ("repo_map",)}
             return {
                 "strategy": "mini_repo_map_plus_hybrid",

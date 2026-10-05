@@ -1,17 +1,20 @@
+import asyncio
 import json
-import time
 import urllib.request
 
 import pytest
+from conftest import collect_events, run_tool
 
 import gencode.cli as gencode_cli
-from gencode.core.runtime import GenCode
 from gencode.core.model_router import ModelClientRouter
+from gencode.core.runtime import GenCode
 from gencode.core.session_store import SessionStore
 from gencode.core.workspace import WorkspaceContext
-from gencode.providers.clients import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from gencode.providers.clients import (
+    AnthropicCompatibleModelClient,
+    OpenAICompatibleModelClient,
+)
 from gencode.testing import ScriptedModelClient
-
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n"
@@ -232,7 +235,7 @@ def test_inspect_image_uses_separate_vision_model_when_configured(tmp_path):
     agent.current_task_state = task_state
     agent.current_run_dir = agent.run_store.start_run(task_state)
 
-    result = agent.run_tool(
+    result = run_tool(agent,
         "inspect_image",
         {"path": "chart.png", "question": "What is shown?", "profile": "general"},
     )
@@ -254,7 +257,7 @@ def test_inspect_image_keeps_medium_summary_inline(tmp_path):
     agent.current_task_state = task_state
     agent.current_run_dir = agent.run_store.start_run(task_state)
 
-    result = agent.run_tool("inspect_image", {"path": "chart.png", "question": "What is shown?"})
+    result = run_tool(agent, "inspect_image", {"path": "chart.png", "question": "What is shown?"})
 
     assert summary.strip() in result
     assert "full output saved:" not in result
@@ -279,17 +282,21 @@ def test_image_inspection_prompt_preserves_complete_ocr_extraction():
 def test_vision_model_call_has_total_timeout(monkeypatch):
     from gencode.core.content_blocks import ModelInput
     from gencode.core.vision import complete_model_with_timeout
+    from gencode.providers.base import ModelResult, ModelStreamEvent
 
     class SlowClient:
         timeout = 0.01
 
-    def slow_complete(*_args, **_kwargs):
-        time.sleep(0.2)
+    async def slow_stream(*_args, **_kwargs):
+        await asyncio.sleep(0.2)
+        yield ModelStreamEvent("completed", result=ModelResult(text="done"))
 
-    monkeypatch.setattr("gencode.core.vision.complete_model", slow_complete)
+    monkeypatch.setattr("gencode.core.vision.stream_model", slow_stream)
 
     with pytest.raises(TimeoutError, match="vision provider request exceeded"):
-        complete_model_with_timeout(SlowClient(), ModelInput(text="describe"), 64)
+        asyncio.run(
+            complete_model_with_timeout(SlowClient(), ModelInput(text="describe"), 64)
+        )
 
 
 def test_load_workspace_image_rejects_path_escape_and_records_safe_metadata(tmp_path):
@@ -343,7 +350,7 @@ def test_inspect_image_tool_calls_model_with_model_input_and_records_media_refs(
     agent.current_task_state = task_state
     agent.current_run_dir = agent.run_store.start_run(task_state)
 
-    result = agent.run_tool(
+    result = run_tool(agent,
         "inspect_image",
         {"path": "chart.png", "question": "What is shown?", "profile": "general"},
     )
@@ -368,7 +375,7 @@ def test_inspect_image_tool_trace_and_history_do_not_store_base64(tmp_path):
     )
     agent = build_agent(tmp_path, model_client=client)
 
-    events = list(agent.engine.run_turn("inspect chart.png"))
+    events = collect_events(agent.engine.run_turn("inspect chart.png"))
 
     assert any(event["type"] == "final" for event in events)
     trace_text = (agent.current_run_dir / "trace.jsonl").read_text(encoding="utf-8")
@@ -396,11 +403,11 @@ def test_same_image_inspection_is_budgeted_per_turn(tmp_path):
     )
     agent = build_agent(tmp_path, model_client=client)
 
-    events = list(agent.engine.run_turn("inspect chart.png repeatedly"))
+    events = collect_events(agent.engine.run_turn("inspect chart.png repeatedly"))
 
     assert any(event["type"] == "final" for event in events)
     tool_items = [item for item in agent.session["history"] if item.get("name") == "inspect_image"]
     assert len(tool_items) == 3
     assert "first observations" in tool_items[0]["content"]
     assert "second observations" in tool_items[1]["content"]
-    assert tool_items[2]["content"].startswith("error: repeated identical tool call")
+    assert tool_items[2]["content"].startswith("error: repeated_identical_call")

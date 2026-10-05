@@ -18,23 +18,21 @@ def native_prompt_contract(agent, native_tools, legacy_tool_lines):
     return (
         "\n".join(legacy_tool_lines),
         """\n            - Return one or more <tool>...</tool> calls, or one <final>...</final>.\n            - Tool calls must look like:\n              <tool>{\"name\":\"tool_name\",\"args\":{...}}</tool>\n            """,
-        "\n".join(
-            [
-                '<tool>{"name":"list_files","args":{"path":"."}}</tool>',
-                '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>',
-                '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
-                '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
-                '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>',
-                '<tool>{"name":"agent","args":{"description":"Inspect auth","prompt":"Find auth entry points","subagent_type":"Explore"}}</tool>',
-                "<final>Done.</final>",
-            ]
+        (
+            '<tool>{"name":"list_files","args":{"path":"."}}</tool>\n'
+            '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":80}}</tool>\n'
+            '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>\n'
+            '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>\n'
+            '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>\n'
+            '<tool>{"name":"agent","args":{"description":"Inspect auth","prompt":"Find auth entry points","subagent_type":"Explore"}}</tool>\n'
+            "<final>Done.</final>"
         ),
         "- Final answers must look like: <final>your answer</final>.",
         '- For write_file and patch_file with multi-line text, prefer XML style: <tool name="write_file" path="file.py"><content>...</content></tool>.',
     )
 
 
-def build_native_messages(agent, user_message, prompt=None):
+def build_native_messages(agent, user_message, prompt=None, *, max_history_items=16):
     """Build structured messages while retaining compressed context summaries."""
     sections = dict(getattr(agent.context_manager, "last_rendered_sections", {}) or {})
     if not sections:
@@ -49,7 +47,9 @@ def build_native_messages(agent, user_message, prompt=None):
         history_without_current = history[:-1]
     else:
         history_without_current = history
-    canonical, canonical_count = _native_history_tail(history_without_current)
+    canonical, canonical_count = _native_history_tail(
+        history_without_current, max_items=max_history_items
+    )
 
     system_parts = []
     for section in ("prefix", "memory", "skills", "relevant_memory", "repo_map"):

@@ -4,10 +4,11 @@ import json
 import os
 
 import pytest
+from conftest import run_tool
 
-from gencode.testing import ScriptedModelClient
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.features.sandbox.config import SandboxConfig
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):
@@ -30,14 +31,14 @@ def read_jsonl(path):
 def test_patch_requires_prior_fresh_read_and_allows_after_read(tmp_path):
     agent = build_agent(tmp_path)
 
-    rejected = agent.run_tool("patch_file", {"path": "README.md", "old_text": "world", "new_text": "gencode"})
+    rejected = run_tool(agent, "patch_file", {"path": "README.md", "old_text": "world", "new_text": "gencode"})
 
     assert "read_file" in rejected
     assert agent._last_tool_result_metadata["tool_error_code"] == "prior_read_required"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello world\n"
 
-    agent.run_tool("read_file", {"path": "README.md", "start": 1, "end": 1})
-    patched = agent.run_tool("patch_file", {"path": "README.md", "old_text": "world", "new_text": "gencode"})
+    run_tool(agent, "read_file", {"path": "README.md", "start": 1, "end": 1})
+    patched = run_tool(agent, "patch_file", {"path": "README.md", "old_text": "world", "new_text": "gencode"})
 
     assert patched == "patched README.md"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "hello gencode\n"
@@ -73,21 +74,21 @@ def test_rejected_patch_can_be_retried_after_informing_read(tmp_path):
 def test_write_file_allows_new_file_but_requires_read_before_overwrite(tmp_path):
     agent = build_agent(tmp_path)
 
-    assert agent.run_tool("write_file", {"path": "notes.txt", "content": "new\n"}) == "wrote notes.txt (4 chars)"
-    rejected = agent.run_tool("write_file", {"path": "README.md", "content": "overwrite\n"})
+    assert run_tool(agent, "write_file", {"path": "notes.txt", "content": "new\n"}) == "wrote notes.txt (4 chars)"
+    rejected = run_tool(agent, "write_file", {"path": "README.md", "content": "overwrite\n"})
 
     assert "read_file" in rejected
     assert agent._last_tool_result_metadata["tool_error_code"] == "prior_read_required"
 
-    agent.run_tool("read_file", {"path": "README.md", "start": 1, "end": 1})
-    assert agent.run_tool("write_file", {"path": "README.md", "content": "overwrite\n"}) == "wrote README.md (10 chars)"
+    run_tool(agent, "read_file", {"path": "README.md", "start": 1, "end": 1})
+    assert run_tool(agent, "write_file", {"path": "README.md", "content": "overwrite\n"}) == "wrote README.md (10 chars)"
 
 
 def test_patch_allows_self_authored_file_without_extra_read(tmp_path):
     agent = build_agent(tmp_path)
 
-    assert agent.run_tool("write_file", {"path": "scripts/check.py", "content": "assert False\n"}) == "wrote scripts/check.py (13 chars)"
-    patched = agent.run_tool(
+    assert run_tool(agent, "write_file", {"path": "scripts/check.py", "content": "assert False\n"}) == "wrote scripts/check.py (13 chars)"
+    patched = run_tool(agent,
         "patch_file",
         {"path": "scripts/check.py", "old_text": "assert False", "new_text": "assert True"},
     )
@@ -125,8 +126,12 @@ def test_repeated_mutating_file_tool_cannot_overwrite_later_patch(tmp_path):
 
 def test_shell_search_like_commands_are_rejected_by_policy(tmp_path):
     agent = build_agent(tmp_path)
+    agent.approval_policy = "ask"
+    agent.approve_async = lambda *_args, **_kwargs: pytest.fail(
+        "a policy-rejected command must not enter approval"
+    )
 
-    rejected = agent.run_tool("run_shell", {"command": "grep -R hello .", "timeout": 20})
+    rejected = run_tool(agent, "run_shell", {"command": "grep -R hello .", "timeout": 20})
 
     assert "search" in rejected
     assert agent._last_tool_result_metadata["tool_error_code"] == "shell_search_should_use_tool"
@@ -155,7 +160,6 @@ def test_tool_governance_decisions_are_run_trace_evidence(tmp_path):
     decisions = [event for event in trace if event["event"] == "governance_decision"]
     assert [(event["decision"], event["reason_code"]) for event in decisions] == [
         ("deny", "unknown_tool"),
-        ("allow", "approval_auto"),
         ("deny", "shell_search_should_use_tool"),
     ]
     assert decisions[-1]["decision_type"] == "tool_policy"
@@ -166,17 +170,15 @@ def test_tool_governance_decisions_are_run_trace_evidence(tmp_path):
     )
     assert report["evidence_summaries"]["governance_summary"] == {
         "schema_version": "gencode.governance_summary.v1",
-        "allow_count": 1,
+        "allow_count": 0,
         "deny_count": 2,
         "warn_count": 0,
         "decision_type_counts": {
             "tool_lookup": 1,
-            "permission": 1,
             "tool_policy": 1,
         },
         "reasons": {
             "unknown_tool": 1,
-            "approval_auto": 1,
             "shell_search_should_use_tool": 1,
         },
         "last_denied_reason": "shell_search_should_use_tool",
@@ -265,10 +267,10 @@ def test_shell_policy_allows_head_tail_grep_after_pipe(tmp_path):
         "python3 --version 2>&1 | head -3",
         "echo a; echo b | grep b",
     ):
-        result = agent.run_tool("run_shell", {"command": command, "timeout": 20})
+        result = run_tool(agent, "run_shell", {"command": command, "timeout": 20})
         assert "exit_code: 0" in result, f"command should run, got: {result[:200]}"
 
-    rejected_after_seq = agent.run_tool(
+    rejected_after_seq = run_tool(agent,
         "run_shell", {"command": "echo a; cat README.md", "timeout": 20}
     )
     assert "search" in rejected_after_seq, "命令分号后跟 cat 仍应被禁"

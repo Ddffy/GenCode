@@ -1,0 +1,88 @@
+URL: https://prachub.com/interview-questions/manage-context-windows-in-an-applied-ai-system
+
+Manage Context Windows in an Applied AI System | Rogo PracHub Questions Experience Learning Guides Interview Prep 
+
+ Back | Home / Rogo / ML System Design 
+ Manage Context Windows in an Applied AI System
+ Last updated: Aug 7, 2026 
+ Quick Overview
+ An applied-AI system-design interview about building model context from user requests, conversation history, retrieved evidence, and tool results. It tests token budgeting, evidence ranking, summarization, provenance, prompt-injection boundaries, and graceful degradation.
+ medium 
+ Rogo 
+ ML System Design 
+ Machine Learning Engineer 
+
+ Manage Context Windows in an Applied AI System
+ Company: Rogo
+ Role: Machine Learning Engineer
+ Category: ML System Design
+ Difficulty: medium
+ Interview Round: Onsite
+
+ Overview: An applied-AI system-design interview about building model context from user requests, conversation history, retrieved evidence, and tool results. It tests token budgeting, evidence ranking, summarization, provenance, prompt-injection boundaries, and graceful degradation.
+ Related Interview Questions
+ Design an ML Forecasting and Pacing System for Ad Bidding - LinkedIn (medium) 
+ Review and Scale an Inference Service Design - Anthropic (medium) 
+ Design a Reliable AI Chatbot Architecture - Amazon (easy) 
+ Route and Batch Inference with Eight GPUs - Anthropic (hard) 
+ Design a Rule-Guided Document Evaluation Agent - Harvey (medium) 
+
+ Back | Home / ML System Design / Rogo 
+
+ Question Canvas 
+
+ Problem Solution Answers 
+ Manage Context Windows in an Applied AI System
+
+ Rogo
+ Jun 24, 2026
+
+ medium Machine Learning Engineer Onsite ML System Design 
+ 2 
+ 0 
+
+ Loading... 
+
+ Submit Your Answer to Earn 20XP
+
+ Sign in to leave a comment
+
+ Loading comments...
+
+ Browse More Questions
+ More ML System Design • More Rogo • More Machine Learning Engineer • Rogo Machine Learning Engineer • Rogo ML System Design • Machine Learning Engineer ML System Design 
+
+ Your design canvas — auto-saved
+ Share as answer 
+
+ PracHub Master your tech interviews with 10,000+ real questions from top companies.
+
+ Product
+ Questions 
+ Learning Tracks 
+ Interview Guides 
+ Resources 
+ Premium 
+ For Universities 
+
+ Browse
+ By Company 
+ By Role 
+ By Category 
+ Topic Hubs 
+ Interview Experiences 
+ SQL Questions 
+ AI Coding Questions 
+ Compare Platforms 
+ Discord Community 
+
+ Support
+ support@prachub.com 
+ (916) 541-4762 
+
+ Legal
+ Privacy Policy 
+ Terms of Service 
+ About Us 
+
+ © 2026 PracHub. All rights reserved.

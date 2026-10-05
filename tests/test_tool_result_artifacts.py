@@ -8,6 +8,7 @@ import sys
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.core.context_manager import ContextManager
 from gencode.core.run_store import RunStore
+from gencode.core.tool_result_artifacts import prepare_tool_result_observation
 from gencode.testing import ScriptedModelClient
 from gencode.tools.base import RegisteredTool
 
@@ -27,6 +28,17 @@ def build_agent(tmp_path, outputs=None, **kwargs):
 
 def read_jsonl(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_fast_read_only_qa_keeps_bounded_code_reads_inline(tmp_path):
+    agent = build_agent(tmp_path)
+    agent.fast_read_only_qa = True
+    result = "x" * 4500
+
+    observation, metadata = prepare_tool_result_observation(agent, "read_file", result)
+
+    assert observation == result
+    assert metadata["full_output_artifact"] == ""
 
 
 def test_long_shell_output_is_clipped_and_full_output_is_saved_as_run_artifact(tmp_path):
@@ -68,12 +80,16 @@ def test_run_shell_status_is_parsed_from_full_result_before_artifact_rendering(t
         ],
     )
     long_stdout = "x" * 3000
+
+    async def long_runner(args):
+        return f"stdout:\n{long_stdout}\nexit_code: 1\nstderr:\nboom"
+
     agent.tools["run_shell"] = RegisteredTool(
         name="run_shell",
         schema={"command": "str", "timeout": "int=20"},
         description="Synthetic shell command.",
         risky=True,
-        runner=lambda args: f"stdout:\n{long_stdout}\nexit_code: 1\nstderr:\nboom",
+        runner=long_runner,
     )
 
     assert agent.ask("run synthetic shell") == "captured"
@@ -95,12 +111,16 @@ def test_long_tool_output_artifact_ref_survives_external_run_store(tmp_path):
         ],
         run_store=RunStore(external_runs),
     )
+
+    async def long_runner(args):
+        return "exit_code: 0\nstdout:\n" + ("x" * 3000)
+
     agent.tools["run_shell"] = RegisteredTool(
         name="run_shell",
         schema={"command": "str", "timeout": "int=20"},
         description="Synthetic shell command.",
         risky=True,
-        runner=lambda args: "exit_code: 0\nstdout:\n" + ("x" * 3000),
+        runner=long_runner,
     )
 
     assert agent.ask("run synthetic shell") == "captured"

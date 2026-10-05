@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..features import memory as memorylib, skills as skillslib
-from .knowledge_context import assemble_typed_knowledge
-from .context_report import ContextReportBuilder, RELEVANT_MEMORY_LIMIT
+from ..features import skills as skillslib
 from .context_memory import render_memory_section
+from .context_report import RELEVANT_MEMORY_LIMIT, ContextReportBuilder
 from .context_sections import (
     CURRENT_REQUEST_SECTION,
     MIN_SECTION_BUDGETS,
@@ -21,6 +20,7 @@ from .context_sections import (
     compute_budget_chars,
     compute_section_budgets,
 )
+from .knowledge_context import assemble_typed_knowledge
 from .turn_history import TurnHistoryBuilder, tail_clip
 
 DEFAULT_TOTAL_BUDGET = 60000
@@ -111,6 +111,8 @@ class ContextManager:
             relevant_memory_enabled = self.agent.feature_enabled("relevant_memory")
             typed_knowledge_enabled = self.agent.feature_enabled("typed_knowledge")
             context_reduction_enabled = self.agent.feature_enabled("context_reduction")
+        if getattr(self.agent, "fast_read_only_qa", False):
+            relevant_memory_enabled = False
         memory_text = "Memory:\n- disabled" if not memory_enabled else str(self.agent.memory_text())
         section_texts = {
             "prefix": str(getattr(self.agent, "prefix", "")),
@@ -305,7 +307,7 @@ class ContextManager:
         header = "Relevant memory:"
         note_texts = [str(note.get("text", "")) for note in selected_notes if str(note.get("text", "")).strip()]
         raw_lines = [header] + [f"- {text}" for text in note_texts]
-        raw = "\n".join(raw_lines) if note_texts else "\n".join([header, "- none"])
+        raw = "\n".join(raw_lines) if note_texts else f"{header}\n- none"
         if not note_texts:
             rendered = raw
             return SectionRender(
@@ -330,7 +332,7 @@ class ContextManager:
                 break
             per_note_budget -= 1
 
-        if len(rendered) > budget and budget > 0:
+        if len(rendered) > budget > 0:
             rendered = tail_clip(raw, budget)
             rendered_notes = [rendered]
 

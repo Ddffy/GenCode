@@ -1,6 +1,6 @@
 import asyncio
-import threading
-import time
+
+from conftest import collect_events
 
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.core.parallel_tools import can_parallelize_tool_batch
@@ -44,23 +44,20 @@ def read_calls():
 
 def test_safe_reads_overlap_but_commit_in_source_order(tmp_path):
     agent = build_agent(tmp_path, read_calls())
-    lock = threading.Lock()
-    release = threading.Event()
+    release = asyncio.Event()
     active = 0
     peak = 0
 
-    def overlapping_read(args):
+    async def overlapping_read(args):
         nonlocal active, peak
-        with lock:
-            active += 1
-            peak = max(peak, active)
-            if active == 2:
-                release.set()
-        release.wait(timeout=2)
+        active += 1
+        peak = max(peak, active)
+        if active == 2:
+            release.set()
+        await asyncio.wait_for(release.wait(), 2)
         if args["path"] == "a.txt":
-            time.sleep(0.05)  # finish B first; commit order must still be A, B
-        with lock:
-            active -= 1
+            await asyncio.sleep(0.05)
+        active -= 1
         return f"result:{args['path']}"
 
     agent.tools["read_file"] = RegisteredTool(
@@ -72,7 +69,7 @@ def test_safe_reads_overlap_but_commit_in_source_order(tmp_path):
         capability=agent.tools["read_file"].capability,
     )
 
-    events = list(agent.engine.run_turn("read both files"))
+    events = collect_events(agent.engine.run_turn("read both files"))
 
     assert peak == 2
     tool_events = [
@@ -89,7 +86,7 @@ def test_safe_reads_overlap_but_commit_in_source_order(tmp_path):
 def test_one_parallel_read_failure_does_not_drop_sibling(tmp_path):
     agent = build_agent(tmp_path, read_calls())
 
-    def read_or_fail(args):
+    async def read_or_fail(args):
         if args["path"] == "a.txt":
             raise OSError("unreadable")
         return "result:b.txt"
@@ -103,7 +100,7 @@ def test_one_parallel_read_failure_does_not_drop_sibling(tmp_path):
         capability=agent.tools["read_file"].capability,
     )
 
-    list(agent.engine.run_turn("read both files"))
+    collect_events(agent.engine.run_turn("read both files"))
 
     history = [item for item in agent.session["history"] if item["role"] == "tool"]
     assert [item["tool_call_id"] for item in history] == ["call-a", "call-b"]
@@ -111,6 +108,77 @@ def test_one_parallel_read_failure_does_not_drop_sibling(tmp_path):
     assert "unreadable" in history[0]["content"]
     assert history[1]["tool_status"] == "ok"
     assert history[1]["content"] == "result:b.txt"
+
+
+def test_steer_cancels_active_parallel_reads_and_skips_waiting_reads(tmp_path):
+    calls = [
+        {"id": f"call-{index}", "name": "read_file", "args": {"path": f"{index}.txt"}}
+        for index in range(5)
+    ]
+    model = NativeScriptedModelClient(
+        [
+            ModelResult(
+                text="",
+                metadata={"native_tool_calling": True},
+                tool_calls=tuple(calls),
+                stop_reason="tool_use",
+            ),
+            ModelResult(text="steered answer", metadata={"native_tool_calling": True}),
+        ]
+    )
+    agent = GenCode(
+        model_client=model,
+        workspace=WorkspaceContext.build(tmp_path),
+        session_store=SessionStore(tmp_path / ".gencode" / "sessions"),
+        approval_policy="auto",
+        git_auto_commit=False,
+        git_auto_undo=False,
+    )
+    for index in range(5):
+        (tmp_path / f"{index}.txt").write_text(str(index), encoding="utf-8")
+
+    active = 0
+    started_paths = []
+    all_started = asyncio.Event()
+    cancelled_count = 0
+    original = agent.tools["read_file"]
+
+    async def blocked_read(args):
+        nonlocal active, cancelled_count
+        active += 1
+        started_paths.append(args["path"])
+        if active == 4:
+            all_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            active -= 1
+            cancelled_count += 1
+
+    agent.tools["read_file"] = RegisteredTool(
+        name=original.name,
+        schema=original.schema,
+        description=original.description,
+        risky=original.risky,
+        runner=blocked_read,
+        capability=original.capability,
+    )
+
+    async def run():
+        turn = asyncio.create_task(agent.ask_async("read five files"))
+        await asyncio.wait_for(all_started.wait(), 2)
+        assert agent.steer("change direction")
+        answer = await asyncio.wait_for(turn, 5)
+        return answer
+
+    assert asyncio.run(run()) == "steered answer"
+    assert len(started_paths) == 4
+    assert "4.txt" not in started_paths
+    assert cancelled_count == 4
+    history = [item for item in agent.session["history"] if item["role"] == "tool"]
+    assert len(history) == 5
+    assert sum(item["tool_error_code"] == "steered" for item in history) == 1
+    assert sum(item["tool_error_code"] == "tool_cancelled" for item in history) == 4
 
 
 def test_parallel_gate_preserves_serial_fallbacks(tmp_path):
@@ -127,7 +195,7 @@ def test_parallel_gate_preserves_serial_fallbacks(tmp_path):
     async def inside_event_loop():
         return can_parallelize_tool_batch(agent, safe, remaining_steps=2)
 
-    assert asyncio.run(inside_event_loop()) is False
+    assert asyncio.run(inside_event_loop()) is True
 
 
 def test_capability_contract_is_fail_closed_and_rejects_misdeclared_writes(tmp_path):
@@ -154,7 +222,7 @@ def test_capability_contract_is_fail_closed_and_rejects_misdeclared_writes(tmp_p
         schema=original.schema,
         description="misdeclared writer",
         risky=False,
-        runner=lambda args: str(args),
+        runner=lambda args: _async_value(str(args)),
         capability=ToolCapability(
             effect=ToolEffect.WRITE,
             concurrency_safe=True,
@@ -170,7 +238,7 @@ def test_capability_contract_is_fail_closed_and_rejects_misdeclared_writes(tmp_p
         schema=original.schema,
         description="risky tool incorrectly declared as a safe read",
         risky=True,
-        runner=lambda args: str(args),
+        runner=lambda args: _async_value(str(args)),
         capability=ToolCapability(
             effect=ToolEffect.READ,
             concurrency_safe=True,
@@ -179,3 +247,7 @@ def test_capability_contract_is_fail_closed_and_rejects_misdeclared_writes(tmp_p
     assert not can_parallelize_tool_batch(
         agent, read_calls(), remaining_steps=2
     )
+
+
+async def _async_value(value):
+    return value

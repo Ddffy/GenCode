@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-from functools import partial
+from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.events import Key
 
-from ..cli import HELP_DETAILS, handle_repl_command
+from ..cli import HELP_DETAILS, handle_repl_command_async
 from .widgets import (
     AskUserPrompt,
     ChatLog,
@@ -21,7 +20,6 @@ from .widgets import (
     WelcomeBanner,
     format_tool_args,
 )
-
 
 GENCODE_TUI_CSS = """
 Screen {
@@ -36,13 +34,14 @@ class GenCodeTuiApp(App):
 
     The TUI is deliberately a presentation layer: CLI argument parsing and agent
     construction still live in `gencode.cli`, while turns are driven through the
-    same `Engine.run_turn()` generator that powers the plain REPL.
+    Engine's replayable Run event stream, as the plain REPL does.
     """
 
     CSS = GENCODE_TUI_CSS
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "submit_input", "Send", priority=True, show=False),
         Binding("ctrl+l", "clear_screen", "Clear"),
+        Binding("ctrl+r", "resume_run", "Resume"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -52,13 +51,18 @@ class GenCodeTuiApp(App):
         self._turn_count = 0
         self._running_tool_cards: list[ToolCard] = []
         self._confirm_prompt: ConfirmPrompt | None = None
-        self._confirm_decision: tuple[threading.Event, dict] | None = None
+        self._confirm_future: asyncio.Future | None = None
         self._ask_user_prompt: AskUserPrompt | None = None
-        self._ask_user_decision: tuple[threading.Event, dict] | None = None
+        self._ask_user_future: asyncio.Future | None = None
+        self._active_turn_task: asyncio.Task | None = None
+        self._active_run_id = ""
+        self._active_run_seq = 0
+        self._streaming_message = None
         self._previous_approve = getattr(agent, "approve", None)
         self._previous_ask_user = getattr(agent, "ask_user_callback", None)
-        self.agent.approve = self._approval_callback
-        self.agent.ask_user_callback = self._ask_user_callback
+        self._previous_approve_async = getattr(agent, "approve_async_callback", None)
+        self.agent.approve_async_callback = self._approval_callback_async
+        self.agent.ask_user_callback = self._ask_user_callback_async
 
     def compose(self) -> ComposeResult:
         yield WelcomeBanner(
@@ -79,6 +83,7 @@ class GenCodeTuiApp(App):
     def on_unmount(self) -> None:
         if self._previous_approve is not None:
             self.agent.approve = self._previous_approve
+        self.agent.approve_async_callback = self._previous_approve_async
         self.agent.ask_user_callback = self._previous_ask_user
 
     def action_clear_screen(self) -> None:
@@ -93,7 +98,23 @@ class GenCodeTuiApp(App):
             return
         bar = self.query_one(InputBar)
         text = bar.input.value.strip() #读取输入
-        if not text or bar.input.disabled:
+        if not text:
+            return
+        if self._active_turn_task is not None:
+            bar.input.value = ""
+            if text.startswith("/queue "):
+                accepted = self.agent.queue_turn(text[7:].strip())
+            elif text == "/cancel":
+                accepted = self.agent.cancel_current_turn()
+            else:
+                message = text[7:].strip() if text.startswith("/steer ") else text
+                accepted = self.agent.steer(message)
+            self.query_one(ChatLog).add_message("user", text)
+            if not accepted:
+                self.query_one(ChatLog).add_message(
+                    "assistant", "No active turn accepted that control request."
+                )
+            bar.focus_input()
             return
         bar.history.append(text)
         bar.history_index = len(bar.history)
@@ -102,7 +123,7 @@ class GenCodeTuiApp(App):
         if text.startswith("/"):
             self.query_one(ChatLog).add_message("user", text)
             bar.hide_slash_suggestions()
-            self._handle_command(text) #命令
+            asyncio.create_task(self._handle_command(text)) #命令
             return
         self.query_one(ChatLog).add_message("user", text)
         self._run_agent(text) #如果是文本直接发给模型
@@ -137,11 +158,7 @@ class GenCodeTuiApp(App):
                 event.prevent_default()
             return
         bar = self.query_one(InputBar)
-        if event.key == "tab" and bar.complete_slash_suggestion():
-            event.prevent_default()
-        elif event.key == "up" and bar.move_slash_selection(-1):
-            event.prevent_default()
-        elif event.key == "down" and bar.move_slash_selection(1):
+        if event.key == "tab" and bar.complete_slash_suggestion() or event.key == "up" and bar.move_slash_selection(-1) or event.key == "down" and bar.move_slash_selection(1):
             event.prevent_default()
         elif event.key == "escape":
             bar.hide_slash_suggestions()
@@ -153,8 +170,8 @@ class GenCodeTuiApp(App):
             bar.history_next()
             event.prevent_default()
 
-    def _handle_command(self, text: str) -> None:
-        handled, should_exit, output = handle_repl_command(self.agent, text)
+    async def _handle_command(self, text: str) -> None:
+        handled, should_exit, output = await handle_repl_command_async(self.agent, text)
         if should_exit:
             self.exit()
             return
@@ -166,16 +183,27 @@ class GenCodeTuiApp(App):
             "assistant", f"Unknown command. Use /help.\n\n{HELP_DETAILS}"
         )
 
-    def _run_agent(self, text: str) -> None:
+    def _run_agent(self, text: str, *, run_id="", after_seq=0) -> None:
         self.query_one(InputBar).set_busy(True)
         self.query_one(ThinkingIndicator).show()
         self._thinking_timer = self.set_interval(
             0.15, self.query_one(ThinkingIndicator).advance
         )
-        asyncio.create_task(self._agent_task(text))
+        self._active_turn_task = asyncio.create_task(
+            self._agent_task(text, run_id=run_id, after_seq=after_seq)
+        )
+
+    def action_resume_run(self) -> None:
+        if self._active_turn_task is not None or not self._active_run_id:
+            return
+        self._run_agent(
+            "",
+            run_id=self._active_run_id,
+            after_seq=self._active_run_seq,
+        )
 
     def _drain_idle_worker_notifications(self) -> None:
-        if self.query_one(InputBar).input.disabled:
+        if self._active_turn_task is not None:
             return
         notifications = self.agent.engine.drain_worker_notifications()
         if not notifications:
@@ -185,13 +213,49 @@ class GenCodeTuiApp(App):
             chat.add_message("assistant", f"[worker notification]\n{notification}")
         self.query_one(StatusBar).update_agent(self.agent)
 
-    async def _agent_task(self, text: str) -> None:
-        loop = asyncio.get_running_loop()
+    async def _agent_task(self, text: str, *, run_id="", after_seq=0) -> None:
         completed = False
+        pending_render = None
         try:
-            await loop.run_in_executor(None, partial(self._drive_turn, text))
+            if not run_id:
+                run_id = await self.agent.engine.start_turn(text)
+                after_seq = 0
+            self._active_run_id = run_id
+            self._active_run_seq = int(after_seq)
+            retries = 0
+            while True:
+                try:
+                    async for event in self.agent.engine.subscribe_turn(
+                        run_id, self._active_run_seq
+                    ):
+                        self._active_run_seq = max(
+                            self._active_run_seq,
+                            int(event.get("run_seq", self._active_run_seq) or self._active_run_seq),
+                        )
+                        render = self._handle_runtime_event(dict(event))
+                        if render is not None:
+                            pending_render = render
+                        if event.get("type") == "turn_finished":
+                            completed = True
+                            break
+                    if completed or self.agent.session_event_bus.is_completed(run_id):
+                        break
+                    retries += 1
+                    if retries > 3:
+                        raise RuntimeError("Run event stream ended before turn_finished")
+                    await asyncio.sleep(0.05 * retries)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    retries += 1
+                    if retries > 3:
+                        raise
+                    await asyncio.sleep(0.05 * retries)
+            if pending_render is not None:
+                await pending_render
+                self.query_one(ChatLog).scroll_end(animate=False)
             completed = True
-        except Exception as exc:
+        except Exception as exc:  # Keep an unexpected turn failure visible without killing the UI loop.  # noqa: BLE001
             if self.is_running:
                 try:
                     self.query_one(ChatLog).add_message("assistant", f"[Error] {exc}")
@@ -200,15 +264,16 @@ class GenCodeTuiApp(App):
         finally:
             self._finish_agent_task(completed)
 
-    def _drive_turn(self, text: str) -> None:
-        for event in self.agent.engine.run_turn(text): ## 开启后台任务
-            try:
-                self.call_from_thread(self._handle_runtime_event, dict(event))
-            except RuntimeError:
-                return
-
-    def _handle_runtime_event(self, event: dict) -> None:
+    def _handle_runtime_event(self, event: dict):
         event_type = str(event.get("type", ""))
+        if event_type == "text_delta":
+            if self._streaming_message is None:
+                self._streaming_message = self.query_one(ChatLog).add_message("assistant", "")
+            content = self._streaming_message.content + str(event.get("content", ""))
+            return self._streaming_message.update_content(content)
+        if event_type == "context_building":
+            self.query_one(ThinkingIndicator).set_detail("assembling context")
+            return
         if event_type == "model_requested":
             attempts = event.get("attempts", 0)
             tool_steps = event.get("tool_steps", 0)
@@ -238,10 +303,22 @@ class GenCodeTuiApp(App):
                 "assistant", f"[worker notification]\n{event.get('content', '')}"
             )
             return
+        if event_type == "worker_event":
+            nested = event.get("event") if isinstance(event.get("event"), dict) else {}
+            if nested.get("type") == "text_delta":
+                self.query_one(ChatLog).add_message(
+                    "assistant",
+                    f"[{event.get('source', 'worker')}] {nested.get('content', '')}",
+                )
+            return
         if event_type in {"retry", "runtime_notice", "final", "stop"}:
-            self.query_one(ChatLog).add_message(
-                "assistant", str(event.get("content", ""))
-            )
+            content = str(event.get("content", ""))
+            if self._streaming_message is not None:
+                render = self._streaming_message.update_content(content)
+                self._streaming_message = None
+                return render
+            else:
+                self.query_one(ChatLog).add_message("assistant", content)
             return
 
     def _finish_tool_card(self, event: dict) -> None:
@@ -277,8 +354,12 @@ class GenCodeTuiApp(App):
             bar = self.query_one(InputBar)
             bar.set_busy(False)
             bar.focus_input()
+            self._active_turn_task = None
+            self._streaming_message = None
             if completed:
                 self._turn_count += 1
+                self._active_run_id = ""
+                self._active_run_seq = 0
             status = self.query_one(StatusBar)
             status.update_turns(self._turn_count)
             status.update_agent(self.agent)
@@ -299,66 +380,46 @@ class GenCodeTuiApp(App):
         except NoMatches:
             pass
 
-    def _approval_callback(self, name: str, args: dict) -> bool:
-        event = threading.Event()
-        decision = {"approved": False}
-        try:
-            self.call_from_thread(self._show_confirm, name, args, event, decision)
-        except RuntimeError:
-            return False
-        event.wait()
-        return bool(decision.get("approved", False))
+    async def _approval_callback_async(self, name: str, args: dict) -> bool:
+        self._confirm_future = asyncio.get_running_loop().create_future()
+        self._show_confirm(name, args)
+        return bool(await self._confirm_future)
 
-    def _show_confirm(
-        self, name: str, args: dict, event: threading.Event, decision: dict
-    ) -> None:
+    def _show_confirm(self, name: str, args: dict) -> None:
         prompt = ConfirmPrompt(name, format_tool_args(name, args))
         self._confirm_prompt = prompt
-        self._confirm_decision = (event, decision)
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
         chat.call_after_refresh(chat.scroll_end, animate=False)
 
     def _resolve_confirm(self, approved: bool) -> None:
-        if self._confirm_decision is None:
+        if self._confirm_future is None:
             return
-        event, decision = self._confirm_decision
-        decision["approved"] = bool(approved)
-        event.set()
+        if not self._confirm_future.done():
+            self._confirm_future.set_result(bool(approved))
         if self._confirm_prompt is not None:
             self._confirm_prompt.remove()
         self._confirm_prompt = None
-        self._confirm_decision = None
+        self._confirm_future = None
 
-    def _ask_user_callback(self, question: str, choices: list[str]) -> str:
-        event = threading.Event()
-        decision = {"answer": ""}
-        try:
-            self.call_from_thread(
-                self._show_ask_user, question, choices, event, decision
-            )
-        except RuntimeError:
-            return ""
-        event.wait()
-        return str(decision.get("answer", ""))
+    async def _ask_user_callback_async(self, question: str, choices: list[str]) -> str:
+        self._ask_user_future = asyncio.get_running_loop().create_future()
+        self._show_ask_user(question, choices)
+        return str(await self._ask_user_future)
 
-    def _show_ask_user(
-        self, question: str, choices: list[str], event: threading.Event, decision: dict
-    ) -> None:
+    def _show_ask_user(self, question: str, choices: list[str]) -> None:
         prompt = AskUserPrompt(question, choices)
         self._ask_user_prompt = prompt
-        self._ask_user_decision = (event, decision)
         chat = self.query_one(ChatLog)
         chat.mount(prompt)
         chat.call_after_refresh(chat.scroll_end, animate=False)
 
     def _resolve_ask_user(self, answer: str) -> None:
-        if self._ask_user_decision is None:
+        if self._ask_user_future is None:
             return
-        event, decision = self._ask_user_decision
-        decision["answer"] = str(answer)
-        event.set()
+        if not self._ask_user_future.done():
+            self._ask_user_future.set_result(str(answer))
         if self._ask_user_prompt is not None:
             self._ask_user_prompt.remove()
         self._ask_user_prompt = None
-        self._ask_user_decision = None
+        self._ask_user_future = None

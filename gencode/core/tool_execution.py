@@ -6,6 +6,7 @@ integration stay on the engine thread so concurrent reads cannot race shared
 runtime state.
 """
 
+import asyncio
 import re
 from dataclasses import dataclass
 
@@ -42,7 +43,11 @@ class ToolCallOutcome:
     metadata: dict
 
 
-def prepare_tool_call(agent, name, args):
+class ToolCancelledError(RuntimeError):
+    pass
+
+
+async def prepare_tool_call(agent, name, args):
     """Run lookup, validation, repetition, permission, and policy in order."""
     tool = agent.tools.get(name)
     if tool is None:
@@ -77,18 +82,44 @@ def prepare_tool_call(agent, name, args):
             security_event_type=security_event_type,
         )
         return PreparedToolCall(name, args, tool, message, metadata)
-    if agent.repeated_tool_call(name, args):
-        metadata = repeated_tool_call_metadata(tool)
+    repetition_reason = (
+        agent.repeated_tool_call_reason(name, args)
+        if hasattr(agent, "repeated_tool_call_reason")
+        else (
+            "repeated_identical_call"
+            if agent.repeated_tool_call(name, args)
+            else ""
+        )
+    )
+    if repetition_reason:
+        metadata = repeated_tool_call_metadata(tool, repetition_reason)
         record_governance_decision(
             agent, name, args, decision="deny",
-            reason_code="repeated_identical_call", decision_type="tool_repetition",
+            reason_code=repetition_reason, decision_type="tool_repetition",
         )
         return PreparedToolCall(
             name, args, tool,
-            f"error: repeated identical tool call for {name}; choose a different tool or return a final answer",
+            f"error: {repetition_reason} for {name}; use the existing evidence, search for an unseen detail, or return a final answer",
             metadata,
         )
-    decision = agent.permission_checker.check(tool, args)
+    policy = ToolPolicyChecker(agent).check(tool, args)
+    emit_tool_policy_decision(agent, tool, args, policy)
+    if not policy.allowed:
+        record_governance_decision(
+            agent, name, args, decision=policy.decision, reason_code=policy.reason,
+            decision_type="tool_policy", original_reason=policy.reason,
+            security_event_type="tool_policy",
+        )
+        metadata = tool_result_metadata(
+            tool, status="rejected", error_code=policy.reason,
+            security_event_type="tool_policy",
+        )
+        return PreparedToolCall(
+            name, args, tool, policy.message, metadata,
+            record_rejection_note=True,
+        )
+
+    decision = await agent.permission_checker.check_async(tool, args)
     emit_permission_decision(agent, tool, args, decision)
     permission_reason = (
         "read_only_violation"
@@ -111,8 +142,6 @@ def prepare_tool_call(agent, name, args):
         return PreparedToolCall(
             name, args, tool, permission_error(agent, tool, decision), metadata
         )
-    policy = ToolPolicyChecker(agent).check(tool, args)
-    emit_tool_policy_decision(agent, tool, args, policy)
     record_governance_decision(
         agent, name, args, decision=policy.decision, reason_code=policy.reason,
         decision_type="tool_policy", original_reason=policy.reason,
@@ -134,12 +163,46 @@ def begin_tool_execution(agent, prepared):
     return agent.capture_workspace_snapshot() if prepared.tool.risky else {}
 
 
-def execute_tool_raw(prepared):
+async def execute_tool_raw(prepared, timeout=None, cancel_event=None):
     """Execute a prepared tool without mutating runtime bookkeeping."""
+    execution = asyncio.create_task(prepared.tool.execute(prepared.args))
+    cancel_waiter = (
+        asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
+    )
+    timeout_waiter = (
+        asyncio.create_task(asyncio.sleep(float(timeout))) if timeout else None
+    )
+    waiting = {execution}
+    if cancel_waiter is not None:
+        waiting.add(cancel_waiter)
+    if timeout_waiter is not None:
+        waiting.add(timeout_waiter)
     try:
-        return RawToolResult(content=prepared.tool.execute(prepared.args).content)
+        done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        if execution in done:
+            result = execution.result()
+            return RawToolResult(content=result.content)
+        if cancel_waiter is not None and cancel_waiter in done:
+            execution.cancel()
+            await asyncio.gather(execution, return_exceptions=True)
+            return RawToolResult(error=ToolCancelledError("tool cancelled"))
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
+        return RawToolResult(error=asyncio.TimeoutError("tool execution timed out"))
+    except asyncio.CancelledError:
+        execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
+        raise
     except Exception as exc:  # noqa: BLE001 - tool failures are returned as observations
         return RawToolResult(error=exc)
+    finally:
+        for waiter in (cancel_waiter, timeout_waiter):
+            if waiter is not None and not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(
+            *(waiter for waiter in (cancel_waiter, timeout_waiter) if waiter is not None),
+            return_exceptions=True,
+        )
 
 
 def finalize_tool_call(agent, prepared, before_snapshot, raw):
@@ -217,7 +280,10 @@ def finalize_tool_call(agent, prepared, before_snapshot, raw):
                 tool,
                 status="partial_success" if workspace_changed else "error",
                 error_code=(
-                    "tool_partial_success" if workspace_changed else "tool_failed"
+                    "tool_cancelled"
+                    if isinstance(exc, ToolCancelledError)
+                    else "tool_timeout" if isinstance(exc, asyncio.TimeoutError)
+                    else "tool_partial_success" if workspace_changed else "tool_failed"
                 ),
                 security_event_type=security_event_type,
                 affected_paths=affected_paths, workspace_changed=workspace_changed,
@@ -232,11 +298,15 @@ def finalize_tool_call(agent, prepared, before_snapshot, raw):
         return ToolCallOutcome(message + git_undo_suffix(metadata), metadata)
 
 
-def execute_prepared_tool(agent, prepared):
+async def execute_prepared_tool(agent, prepared):
     if not prepared.allowed:
         return finalize_tool_call(agent, prepared, {}, RawToolResult())
     before_snapshot = begin_tool_execution(agent, prepared)
-    raw = execute_tool_raw(prepared)
+    raw = await execute_tool_raw(
+        prepared,
+        timeout=getattr(agent, "tool_timeout_seconds", None),
+        cancel_event=getattr(agent, "turn_cancel_event", None),
+    )
     return finalize_tool_call(agent, prepared, before_snapshot, raw)
 
 

@@ -1,0 +1,410 @@
+URL: https://prachub.com/coding-questions
+
+Coding & Algorithms Interview Questions (Updated 2026) | PracHub PracHub Questions Experience Learning Guides Interview Prep 
+
+ Coding & Algorithms Interview Questions
+ Practice 3,809 real coding and algorithms interview questions reported from interviews at Meta, Amazon, Google, Uber and Microsoft. The mix follows what these loops actually ask: arrays and strings, hash maps, two pointers and sliding windows, binary search, linked lists, trees and graphs, BFS and DFS, recursion and backtracking, dynamic programming, heaps and priority queues, and the occasional design-a-data-structure round. Roughly four in five are rated medium, which is where most technical screens sit; 477 are hard and cluster in onsite loops. 3,033 of them open in a console where you can run your solution against the test cases in Python, Java, C++ or JavaScript. 2,712 come from Software Engineer interviews, with the rest from Machine Learning Engineer, Data Scientist and Data Engineer loops, and 404 were set as take-home projects rather than live sessions.
+ Read more 
+ Questions 
+ 3.8k
+
+ Companies 
+ 378
+
+ Updated 
+ 09.11.2026
+
+ 3.8k Questions 378 Companies 09.11.2026 
+
+ PLTCHK " I got asked a hardcore MCM DP question and I saw it on PracHub as well. Solved that question in 5 minutes. Without PracHub I doubt I could solve it in 5 hours. Though somehow didn't get hired, perhaps I guess I solved it too fast? /s "
+
+ _The_TaNk_ " Believe me i'm a student here jn US. Recently interviewed for MSFT. They asked me exact question from PracHub. I saw it the night before and ignored it cause why waste time on random sites. I legit wanna go back and redo this whole thing if I had chance. Not saying will work for everyone but there is certainly some merit to that website. And i'm gonna use it in future prep from now on like lc tagged "
+
+ Chris Senior SWE, LinkedIn " 10 years of experience but never worked at a top company. PracHub's senior-level questions helped me break into FAANG at 35. Age is just a number. "
+
+ sleepy33 " I was skeptical about the 'real questions' claim, so I put it to the test. I searched for the exact question I got grilled on at my last Meta onsite... and it was right there. Word for word. "
+
+ Jake Senior ML Engineer, Lyft " Got a Google recruiter call on Monday, interview on Friday. Crammed PracHub for 4 days. Passed every round. This platform is a miracle worker. "
+
+ nuggetlord " I've used LC, Glassdoor, and random Discords. Nothing comes close to the accuracy here. The questions are actually current — that's what got me. Felt like I had a cheat sheet during the interview. "
+
+ Carlos Full Stack, Shopify " The solution quality is insane. It covers approach, edge cases, time complexity, follow-ups. Nothing else comes close. "
+
+ boba.tea.vibes " Legit the only resource you need. TC went from 180k -> 350k. Just memorize the top 50 for your target company and you're golden. "
+
+ Andy SWE-II, Google " PracHub Premium for one month cost me the price of two coffees a week. It landed me a $280K+ starting offer. "
+
+ couchpotato99 " Literally just signed a $600k offer. I only had 2 weeks to prep, so I focused entirely on the company-tagged lists here. If you're targeting L5+, don't overthink it. "
+
+ Shruti Data Engineer, Salesforce " Coaches and bootcamp prep courses cost around $200-300 but PracHub Premium is actually less than a Netflix subscription. And it landed me a $178K offer. "
+
+ midnightramen " I honestly don't know how you guys gather so many real interview questions. It's almost scary. I walked into my Amazon loop and recognized 3 out of 4 problems from your database. "
+
+ Bianca Frontend Eng, Figma " Discovered PracHub 10 days before my interview. By day 5, I stopped being nervous. By interview day, I was actually excited to show what I knew. "
+
+ tambrahm007 " I recently cleared Uber interviews (strong hire in the design round) and all the questions were present in prachub. "
+
+ toa " The search is what sold me. I typed in a really niche DP problem I got asked last year and it actually came up, full breakdown and everything. These guys are clearly updating it constantly. "
+
+ PLTCHK " I got asked a hardcore MCM DP question and I saw it on PracHub as well. Solved that question in 5 minutes. Without PracHub I doubt I could solve it in 5 hours. Though somehow didn't get hired, perhaps I guess I solved it too fast? /s "
+
+ _The_TaNk_ " Believe me i'm a student here jn US. Recently interviewed for MSFT. They asked me exact question from PracHub. I saw it the night before and ignored it cause why waste time on random sites. I legit wanna go back and redo this whole thing if I had chance. Not saying will work for everyone but there is certainly some merit to that website. And i'm gonna use it in future prep from now on like lc tagged "
+
+ Chris Senior SWE, LinkedIn " 10 years of experience but never worked at a top company. PracHub's senior-level questions helped me break into FAANG at 35. Age is just a number. "
+
+ sleepy33 " I was skeptical about the 'real questions' claim, so I put it to the test. I searched for the exact question I got grilled on at my last Meta onsite... and it was right there. Word for word. "
+
+ Jake Senior ML Engineer, Lyft " Got a Google recruiter call on Monday, interview on Friday. Crammed PracHub for 4 days. Passed every round. This platform is a miracle worker. "
+
+ nuggetlord " I've used LC, Glassdoor, and random Discords. Nothing comes close to the accuracy here. The questions are actually current — that's what got me. Felt like I had a cheat sheet during the interview. "
+
+ Carlos Full Stack, Shopify " The solution quality is insane. It covers approach, edge cases, time complexity, follow-ups. Nothing else comes close. "
+
+ boba.tea.vibes " Legit the only resource you need. TC went from 180k -> 350k. Just memorize the top 50 for your target company and you're golden. "
+
+ Andy SWE-II, Google " PracHub Premium for one month cost me the price of two coffees a week. It landed me a $280K+ starting offer. "
+
+ couchpotato99 " Literally just signed a $600k offer. I only had 2 weeks to prep, so I focused entirely on the company-tagged lists here. If you're targeting L5+, don't overthink it. "
+
+ Shruti Data Engineer, Salesforce " Coaches and bootcamp prep courses cost around $200-300 but PracHub Premium is actually less than a Netflix subscription. And it landed me a $178K offer. "
+
+ midnightramen " I honestly don't know how you guys gather so many real interview questions. It's almost scary. I walked into my Amazon loop and recognized 3 out of 4 problems from your database. "
+
+ Bianca Frontend Eng, Figma " Discovered PracHub 10 days before my interview. By day 5, I stopped being nervous. By interview day, I was actually excited to show what I knew. "
+
+ tambrahm007 " I recently cleared Uber interviews (strong hire in the design round) and all the questions were present in prachub. "
+
+ toa " The search is what sold me. I typed in a really niche DP problem I got asked last year and it actually came up, full breakdown and everything. These guys are clearly updating it constantly. "
+
+ Company 
+ Role 
+ Category 1 
+ Difficulty 
+ Round 
+ Seniority 
+ Clear 
+ Most Popular 
+ Latest Knowledge Hub 
+ Showing 20 results 
+
+ All SWE DS MLE PM 
+
+ Amazon 
+ Easy 
+
+ Software Engineer 
+ Find the Earliest Pair with a Target Sum
+ Problem Given an integer array values and an integer target, return the zero-based indices of two distinct elements whose sum equals target. There may...
+ Coding & Algorithms Arrays & Strings 
+ 231 
+ 7 
+ 2296 people solved 
+
+ Aug 19, 2026
+
+ Stripe 
+ Hard 
+
+ Software Engineer 
+ Find Weekly Deployment Windows Across Time Zones
+ Problem A week is a repeating timeline of 10080 minutes. Teams define local-time intervals that either allow or freeze deployments, together with fixe...
+ Coding & Algorithms Intervals & Scheduling 
+ 55 
+ 0 
+ 841 people solved 
+
+ Aug 27, 2026
+
+ Google 
+ Easy 
+
+ Software Engineer 
+ Assign the Minimum Fleet to Rental Reservations
+ Problem A rental company receives reservations. Each reservation has a unique ID, a pickup time, and a return time. One vehicle can serve non-overlapp...
+ Coding & Algorithms Intervals & Scheduling Heaps & Priority Queues 
+ 151 
+ 3 
+ 1579 people solved 
+
+ Aug 14, 2026
+
+ Amazon 
+ Medium 
+
+ Software Engineer New Grad 
+ Top K Frequent Values
+ Top K Frequent Values Implement top_k_frequent(values: list[int], k: int) -> list[int]. Return the k distinct integers that occur most frequently in v...
+ Coding & Algorithms Heaps & Priority Queues Arrays & Strings 
+ 25 
+ 1 
+ 386 people solved 
+
+ Sep 2, 2026
+
+ Stripe 
+ Medium 
+
+ Software Engineer 
+ Parse and Format Arbitrarily Nested Tasks from CSV
+ Problem Parse CSV records describing tasks and recursively nested subtasks, then format the resulting forest with distinct connectors for final and no...
+ Coding & Algorithms Parsing & Interpreters Trees 
+ 52 
+ 1 
+ 604 people solved 
+
+ Aug 25, 2026
+
+ Google 
+ Medium 
+
+ Software Engineer 
+ Predict the Most Frequent Next Word in Constant Time
+ Predict the Most Frequent Next Word in Constant Time You are given training sequences of words and a list of query words. For every adjacent pair in e...
+ Coding & Algorithms 
+ 30 
+ 0 
+ 216 people solved 
+
+ Sep 3, 2026
+
+ Amazon 
+ Medium 
+
+ Software Engineer New Grad 
+ Median of a Data Stream
+ Median of a Data Stream Process an ordered sequence of commands for a streaming-median data structure. An ADD command inserts one integer, and a MEDIA...
+ Coding & Algorithms 
+ 21 
+ 1 
+ 193 people solved 
+
+ Sep 2, 2026
+
+ Google 
+ Medium 
+
+ Software Engineer 
+ Calculate Highway Tolls from Ordered Checkpoint Logs
+ Problem A highway has checkpoints numbered 0 through m - 1 in road order. segmentFees[i] is the toll for traveling between checkpoints i and i + 1 in ...
+ Coding & Algorithms Arrays & Strings 
+ 64 
+ 4 
+ 701 people solved 
+
+ Aug 12, 2026
+
+ Amazon 
+ Medium 
+
+ Software Engineer 
+ Minimize Delivery-Grid Inconvenience
+ Minimize Delivery-Grid Inconvenience A binary grid marks delivery centers with 1 and all other cells with 0. The distance between two cells is Chebysh...
+ Coding & Algorithms Grids & Matrices Binary Search 
+ 21 
+ 0 
+ 203 people solved 
+
+ Aug 26, 2026
+
+ Google 
+ Medium 
+
+ Software Engineer 
+ Minimum Path Node Count with an Optional Broken Vertex
+ Minimum Path Node Count with an Optional Broken Vertex You are given an undirected graph as an adjacency list connections, two vertices start and dest...
+ Coding & Algorithms 
+ 5 
+ 0 
+ 100 people solved 
+
+ Sep 3, 2026
+
+ OpenAI 
+ Medium 
+
+ Machine Learning Engineer 
+ Simulate Infection Spread with Immunity and Recovery
+ Problem Simulate infection spread on a rectangular grid over a fixed number of days. Each cell is one of: - S: a susceptible person. - I: an infected ...
+ Coding & Algorithms Simulation & State Machines 
+ 32 
+ 1 
+ 461 people solved 
+
+ Aug 15, 2026
+
+ OpenAI 
+ Hard 
+
+ Machine Learning Engineer 
+ Compute Prefix Matrix Products
+ Compute Prefix Matrix Products Given an ordered sequence of square integer matrices with the same dimensions, return every left-to-right prefix produc...
+ Coding & Algorithms 
+ 21 
+ 0 
+ 172 people solved 
+
+ Aug 23, 2026
+
+ Pinterest 
+ Medium 
+
+ Software Engineer 
+ Remove and Compact a Parent-Index Forest
+ Problem A forest is represented by parent, where node value is its array index. A root points to itself; every other node points to its parent's index...
+ Coding & Algorithms Trees 
+ 19 
+ 1 
+ 223 people solved 
+
+ Aug 27, 2026
+
+ Stripe 
+ Medium 
+
+ Software Engineer 
+ Register Data Centers and Route to the Nearest Healthy Region
+ Problem Process commands for an in-memory registry of data centers. Each registered region has integer latitude, integer longitude, positive integer c...
+ Coding & Algorithms Simulation & State Machines 
+ 51 
+ 1 
+ 455 people solved 
+
+ Aug 13, 2026
+
+ LinkedIn 
+ Hard 
+
+ Software Engineer 
+ Shortest Word Distance Queries
+ Shortest Word Distance Queries Implement shortest_word_distances(words: list[str], queries: list[list[str]]) -> list[int]. Preprocess the fixed word s...
+ Coding & Algorithms 
+ 7 
+ 0 
+ 85 people solved 
+
+ Sep 1, 2026
+
+ Google 
+ Medium 
+
+ Software Engineer 
+ Implement a Reusable Locker Allocation System
+ Problem A locker bank has lockers numbered from 1 through n. Process operations in order. store(customer) assigns the smallest available locker and re...
+ Coding & Algorithms Data Structure Design 
+ 20 
+ 0 
+ 365 people solved 
+
+ Aug 14, 2026
+
+ Apple 
+ Medium 
+
+ Software Engineer 
+ Count Islands in a Binary Grid
+ Problem Given a rectangular grid of land and water, count the connected islands. Land cells connect only through shared horizontal or vertical edges. ...
+ Coding & Algorithms Grids & Matrices 
+ 14 
+ 0 
+ 180 people solved 
+
+ Aug 25, 2026
+
+ Amazon 
+ Medium 
+
+ Software Engineer 
+ Count Customers Who Visited on Multiple Dates
+ Problem Each store-entry log is [customerId, date], where date is an integer day identifier. Count how many distinct customers visited on at least two...
+ Coding & Algorithms Arrays & Strings 
+ 52 
+ 1 
+ 356 people solved 
+
+ Aug 16, 2026
+
+ Amazon 
+ Medium 
+
+ Software Engineer Senior+ 
+ Find the Most Frequent Request IDs
+ Problem A service receives a large sequence of request IDs. Return the k IDs with the highest frequency so an operator can identify the heaviest reque...
+ Coding & Algorithms Heaps & Priority Queues 
+ 21 
+ 0 
+ 186 people solved 
+
+ Aug 22, 2026
+
+ Anthropic 
+ Hard 
+
+ Software Engineer Locked 
+ Convert Streaming Call-Stack Samples into Function Events
+ Convert timestamped call-stack samples into ordered function start and end events, preserving frame depth and recursive occurrences. Handle stack chan...
+ Coding & Algorithms Arrays & Strings 
+ 86 
+ 0 
+ 616 people solved 
+
+ Aug 5, 2026
+
+ Previous 1 2 ... 191 Next 
+
+ Popular Categories 
+ All SQL Coding System Design Behavioral ML Analytics ML System Design 
+
+ Daily Quest 
+ Sign in to earn XP for every problem you solve.
+
+ Frequently Asked Questions
+ How difficult are Coding & Algorithms interview questions? Difficulty spans a wide range: from quick easy warm-ups to multi-stage hard problems that require advanced data structures or algorithmic proofs. Most companies place a majority of live coding rounds at the medium level, with occasional hard questions used to distinguish senior candidates. Interviewers evaluate problem framing, algorithm choice, time/space complexity, clean implementation, and thoughtful testing under time pressure. Expect more conceptual depth at Google, more consistent medium-to-hard screens at Meta, and Amazon to mix coding with leadership signals. Leveling depends on role and seniority: entry-level focuses on fundamentals; senior roles emphasize design, optimizations, and tradeoffs.
+
+ Where does Coding & Algorithms appear in a typical interview loop, and which companies weight it most heavily? Coding & Algorithms is usually the first technical hurdle: it appears in phone/online screens, followed by one or more onsite or virtual coding rounds during the loop. Typical sequences are a technical screen, two to three in-loop coding sessions, then system design or behavioral rounds. Companies that weight this category heavily include Google, Meta, and Amazon, where coding performance often determines whether you progress. Candidates commonly concentrate practice for weeks or months beforehand; most targeting large tech firms prepare intensively for 6–12 weeks, while some spend 3–6 months for deeper mastery or level changes.
+
+ How long should I prepare and how should I structure that preparation? Plan focused, progressive practice over a realistic timeline. A practical structure is an 8–12 week block: weeks 1–2 solidify fundamentals and language fluency; weeks 3–6 target core patterns (arrays, trees, graphs, DP) with timed problem sessions and pattern tagging; weeks 7–9 emphasize mock interviews, end-to-end problem solving, and optimization tradeoffs; final weeks simulate real loops with full-length sessions and targeted weak-point drills. Candidates with less experience may extend to 12–16 weeks. Regularly review mistakes, practice communicating solutions aloud, and include at least one weekly mock interview with peer or coach feedback.
+
+ What key subtopics and patterns should I master for Coding & Algorithms interviews? Master a consistent set of patterns and their variations: arrays and strings (two pointers, sliding window), hash maps and frequency counts, sorting and binary search, recursion and backtracking, dynamic programming, trees and traversals, graphs (BFS/DFS, shortest paths, union-find), heaps and priority queues, and greedy algorithms. Also practice complexity analysis, space-time tradeoffs, and writing bug-resistant code with tests. For higher levels, focus on amortized analysis, advanced graph algorithms, segment trees or Fenwick trees, and system-aware optimizations. Interviewers value reusable problem templates and the ability to generalize patterns to new prompts.
+
+ What are standout tips and common pitfalls to avoid in Coding & Algorithms interviews? Start by clarifying requirements and constraints, then outline your approach before coding. Write a correct, readable baseline solution first, then iterate to improve complexity while narrating tradeoffs. Test with simple and edge cases, and handle nulls, off-by-one, and empty inputs explicitly. Communicate continuously; silence looks like confusion. Avoid premature optimization, overcomplicating solutions, or ignoring interviewer hints. Time management matters: if stuck, discuss alternate approaches and code a partial solution. Finally, practice mock interviews to reduce anxiety and build the habit of clear, structured explanations under pressure.
+
+ Explore more Coding & Algorithms interview questions
+ Jump straight to Coding & Algorithms questions at a specific company or for a specific role.
+
+ By company
+ Meta 320 Amazon 265 Google 247 Uber 151 Microsoft 117 OpenAI 92 TikTok 91 ByteDance 86 
+
+ By role
+ Software Engineer 3006 Data Scientist 343 Machine Learning Engineer 326 Data Engineer 59 Backend Engineer 29 
+
+ PracHub Master your tech interviews with 10,000+ real questions from top companies.
+
+ Product
+ Questions 
+ Learning Tracks 
+ Interview Guides 
+ Resources 
+ Premium 
+ For Universities 
+
+ Browse
+ By Company 
+ By Role 
+ By Category 
+ Topic Hubs 
+ Interview Experiences 
+ SQL Questions 
+ AI Coding Questions 
+ Compare Platforms 
+ Discord Community 
+
+ Support
+ support@prachub.com 
+ (916) 541-4762 
+
+ Legal
+ Privacy Policy 
+ Terms of Service 
+ About Us 
+
+ © 2026 PracHub. All rights reserved.

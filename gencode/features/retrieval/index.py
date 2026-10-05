@@ -8,6 +8,7 @@ import math
 import sqlite3
 import struct
 import threading
+import zlib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -82,6 +83,20 @@ class SQLiteRetrievalIndex:
             connection.execute(
                 "INSERT OR IGNORE INTO retrieval_index_generation VALUES (1, 0)"
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS retrieval_code_file_states (
+                workspace_id TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL, source_hash TEXT NOT NULL,
+                chunk_config TEXT NOT NULL, model_id TEXT NOT NULL,
+                chunk_count INTEGER NOT NULL,
+                PRIMARY KEY(workspace_id, path))"""
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS retrieval_code_chunk_cache (
+                workspace_id TEXT NOT NULL, path TEXT NOT NULL, source_hash TEXT NOT NULL,
+                chunk_config TEXT NOT NULL, payload BLOB NOT NULL,
+                PRIMARY KEY(workspace_id, path, source_hash, chunk_config))"""
+            )
             # Structural sections (a function, a heading section) exist so a
             # matched child can be expanded to the whole section before it is
             # handed to generation. They are stored but deliberately not indexed:
@@ -112,17 +127,27 @@ class SQLiteRetrievalIndex:
         embedding_batch_size=64,
         force=False,
         sections=(),
+        preserve_model=False,
     ):
         rows = list(chunks)
         model_id = str(getattr(embedder, "model_id", "") or "disabled")
-        signature = self._signature(rows, model_id)
+        existing_manifest = None
         with self._lock, self._connect() as connection:
-            existing = connection.execute(
-                "SELECT signature, model_id FROM retrieval_manifests WHERE namespace=? AND workspace_id=?",
+            existing_manifest = connection.execute(
+                "SELECT signature, model_id FROM retrieval_manifests "
+                "WHERE namespace=? AND workspace_id=?",
                 (str(namespace), str(workspace_id)),
             ).fetchone()
-            if not force and existing == (signature, model_id):
-                return {"changed": False, "chunks": len(rows), "signature": signature}
+        if preserve_model and embedder is None and existing_manifest:
+            model_id = str(existing_manifest[1])
+        signature = self._signature(rows, model_id)
+
+        serialized_rows = {
+            chunk.chunk_id: json.dumps(
+                chunk.to_dict(), ensure_ascii=False, sort_keys=True
+            )
+            for chunk in rows
+        }
 
         eligible = [
             chunk
@@ -133,6 +158,48 @@ class SQLiteRetrievalIndex:
             and (chunk.scope == "global" or chunk.workspace_id == str(workspace_id))
         ]
         eligible_ids = {chunk.chunk_id for chunk in eligible}
+        with self._lock, self._connect() as connection:
+            existing_chunks = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT chunk_id, chunk_json FROM retrieval_chunks "
+                    "WHERE source_type=? AND workspace_id=?",
+                    (str(namespace), str(workspace_id)),
+                ).fetchall()
+            }
+            existing_vector_ids = {
+                row[0]
+                for row in connection.execute(
+                    """SELECT v.chunk_id FROM retrieval_vectors v
+                    JOIN retrieval_chunks c USING(chunk_id)
+                    WHERE v.model_id=? AND c.source_type=? AND c.workspace_id=?""",
+                    (model_id, str(namespace), str(workspace_id)),
+                ).fetchall()
+            }
+        changed_ids = {
+            chunk_id
+            for chunk_id, payload in serialized_rows.items()
+            if existing_chunks.get(chunk_id) != payload
+        }
+        missing_vectors = [
+            chunk
+            for chunk in eligible
+            if chunk.chunk_id not in existing_vector_ids or chunk.chunk_id in changed_ids
+        ] if embedder is not None else []
+        if (
+            not force
+            and existing_manifest == (signature, model_id)
+            and not changed_ids
+            and not missing_vectors
+        ):
+            return {
+                "changed": False,
+                "chunks": len(rows),
+                "signature": signature,
+                "dense_complete": self.code_dense_complete(
+                    namespace=namespace, workspace_id=workspace_id, model_id=model_id
+                ) if str(namespace) == "code" else None,
+            }
         # Gate sections by the same rules as their children, so quarantined or
         # out-of-scope material cannot leak back in through an expansion.
         eligible_section_ids = {chunk.section_id for chunk in eligible if chunk.section_id}
@@ -142,10 +209,10 @@ class SQLiteRetrievalIndex:
             if section.chunk_id in eligible_section_ids
         ]
         vectors = {}
-        if embedder is not None and eligible:
+        if embedder is not None and missing_vectors:
             batch_size = max(1, int(embedding_batch_size))
-            for offset in range(0, len(eligible), batch_size):
-                batch = eligible[offset : offset + batch_size]
+            for offset in range(0, len(missing_vectors), batch_size):
+                batch = missing_vectors[offset : offset + batch_size]
                 embedded = embedder.embed_documents(
                     [chunk.embedding_text() for chunk in batch]
                 )
@@ -165,29 +232,91 @@ class SQLiteRetrievalIndex:
                     (str(namespace), str(workspace_id)),
                 ).fetchall()
             ]
-            if old_ids:
-                placeholders = ",".join("?" for _ in old_ids)
-                connection.execute(
-                    f"DELETE FROM retrieval_vectors WHERE chunk_id IN ({placeholders})",
-                    old_ids,
-                )
-                if self.fts_enabled:
+            new_ids = {chunk.chunk_id for chunk in rows}
+            stale_ids = [chunk_id for chunk_id in old_ids if chunk_id not in new_ids]
+            invalid_vector_ids = (
+                set(stale_ids)
+                | (new_ids - eligible_ids)
+                | (changed_ids & new_ids)
+            )
+            if invalid_vector_ids:
+                vector_ids = sorted(invalid_vector_ids)
+                for offset in range(0, len(vector_ids), 900):
+                    batch = vector_ids[offset : offset + 900]
+                    placeholders = ",".join("?" for _ in batch)
                     connection.execute(
-                        f"DELETE FROM retrieval_fts WHERE chunk_id IN ({placeholders})",
-                        old_ids,
+                        f"DELETE FROM retrieval_vectors WHERE chunk_id IN ({placeholders})",
+                        batch,
                     )
-            connection.execute(
-                "DELETE FROM retrieval_chunks WHERE source_type=? AND workspace_id=?",
-                (str(namespace), str(workspace_id)),
-            )
-            connection.execute(
-                "DELETE FROM retrieval_sections WHERE namespace=? AND workspace_id=?",
-                (str(namespace), str(workspace_id)),
-            )
+            if stale_ids:
+                for offset in range(0, len(stale_ids), 900):
+                    batch = stale_ids[offset : offset + 900]
+                    placeholders = ",".join("?" for _ in batch)
+                    if self.fts_enabled:
+                        connection.execute(
+                            f"DELETE FROM retrieval_fts WHERE chunk_id IN ({placeholders})",
+                            batch,
+                        )
+                    connection.execute(
+                        f"DELETE FROM retrieval_chunks WHERE chunk_id IN ({placeholders})",
+                        batch,
+                    )
             for chunk in rows:
+                if chunk.chunk_id not in changed_ids:
+                    continue
                 self._insert_chunk(connection, chunk)
                 if chunk.chunk_id in eligible_ids and self.fts_enabled:
+                    connection.execute(
+                        "DELETE FROM retrieval_fts WHERE chunk_id=?", (chunk.chunk_id,)
+                    )
                     self._insert_fts(connection, chunk)
+                elif self.fts_enabled:
+                    connection.execute(
+                        "DELETE FROM retrieval_fts WHERE chunk_id=?", (chunk.chunk_id,)
+                    )
+            if self.fts_enabled and invalid_vector_ids:
+                # Vectors and FTS rows have separate lifecycles. This branch is
+                # intentionally limited to chunks whose eligibility changed.
+                for chunk_id in sorted(new_ids - eligible_ids):
+                    connection.execute(
+                        "DELETE FROM retrieval_fts WHERE chunk_id=?", (chunk_id,)
+                    )
+            old_section_ids = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT chunk_id FROM retrieval_sections WHERE namespace=? AND workspace_id=?",
+                    (str(namespace), str(workspace_id)),
+                ).fetchall()
+            }
+            new_section_ids = {section.chunk_id for section in section_rows}
+            stale_section_ids = sorted(old_section_ids - new_section_ids)
+            for offset in range(0, len(stale_section_ids), 900):
+                batch = stale_section_ids[offset : offset + 900]
+                placeholders = ",".join("?" for _ in batch)
+                connection.execute(
+                    f"DELETE FROM retrieval_sections WHERE namespace=? AND workspace_id=? "
+                    f"AND chunk_id IN ({placeholders})",
+                    [str(namespace), str(workspace_id), *batch],
+                )
+            existing_sections = {
+                row[0]: row[1]
+                for row in connection.execute(
+                    "SELECT chunk_id, payload_json FROM retrieval_sections "
+                    "WHERE namespace=? AND workspace_id=?",
+                    (str(namespace), str(workspace_id)),
+                ).fetchall()
+            }
+            for section in section_rows:
+                payload = json.dumps(
+                    section.to_dict(), ensure_ascii=False, sort_keys=True
+                )
+                if existing_sections.get(section.chunk_id) == payload:
+                    continue
+                connection.execute(
+                    "INSERT OR REPLACE INTO retrieval_sections VALUES (?, ?, ?, ?)",
+                    (section.chunk_id, str(namespace), str(workspace_id), payload),
+                )
+            for chunk in missing_vectors:
                 vector = vectors.get(chunk.chunk_id)
                 if vector is not None:
                     connection.execute(
@@ -203,18 +332,6 @@ class SQLiteRetrievalIndex:
                 "INSERT OR REPLACE INTO retrieval_manifests VALUES (?, ?, ?, ?, ?)",
                 (str(namespace), str(workspace_id), signature, model_id, len(rows)),
             )
-            for section in section_rows:
-                connection.execute(
-                    "INSERT OR REPLACE INTO retrieval_sections VALUES (?, ?, ?, ?)",
-                    (
-                        section.chunk_id,
-                        str(namespace),
-                        str(workspace_id),
-                        json.dumps(
-                            section.to_dict(), ensure_ascii=False, sort_keys=True
-                        ),
-                    ),
-                )
             connection.execute(
                 "UPDATE retrieval_index_generation SET generation = generation + 1 WHERE id = 1"
             )
@@ -233,6 +350,200 @@ class SQLiteRetrievalIndex:
             "chunks": len(rows),
             "sections": len(section_rows),
             "signature": signature,
+            "embedded_new_chunks": len(vectors),
+            "dense_complete": self.code_dense_complete(
+                namespace=namespace, workspace_id=workspace_id, model_id=model_id
+            ) if str(namespace) == "code" else None,
+        }
+
+    def code_snapshot_matches(self, workspace_id, file_states, *, chunk_config):
+        """Fast-path a code index whose tracked file metadata has not changed."""
+        wanted = {
+            str(path): (int(state["size"]), int(state["mtime_ns"]))
+            for path, state in file_states.items()
+        }
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """SELECT path, size, mtime_ns, chunk_config, model_id
+                FROM retrieval_code_file_states WHERE workspace_id=?""",
+                (str(workspace_id),),
+            ).fetchall()
+            manifest = connection.execute(
+                "SELECT chunk_count FROM retrieval_manifests "
+                "WHERE namespace='code' AND workspace_id=?",
+                (str(workspace_id),),
+            ).fetchone()
+        actual = {
+            str(path): (int(size), int(mtime_ns), str(config))
+            for path, size, mtime_ns, config, _owner_model in rows
+        }
+        if not manifest or set(actual) != set(wanted):
+            return None
+        for path, (size, mtime_ns) in wanted.items():
+            if actual[path] != (size, mtime_ns, str(chunk_config)):
+                return None
+        return {
+            "chunks": int(manifest[0]),
+        }
+
+    def code_dense_complete(self, *, namespace="code", workspace_id, model_id):
+        with self._lock, self._connect() as connection:
+            chunks = int(connection.execute(
+                """SELECT COUNT(*) FROM retrieval_chunks
+                WHERE source_type=? AND workspace_id=? AND status='active'
+                  AND sensitivity='normal' AND injection_flag=0
+                  AND (scope='global' OR workspace_id=?)""",
+                (str(namespace), str(workspace_id), str(workspace_id)),
+            ).fetchone()[0])
+            vectors = int(connection.execute(
+                """SELECT COUNT(DISTINCT v.chunk_id) FROM retrieval_vectors v
+                JOIN retrieval_chunks c USING(chunk_id)
+                WHERE v.model_id=? AND c.source_type=? AND c.workspace_id=?
+                  AND c.status='active' AND c.sensitivity='normal' AND c.injection_flag=0
+                  AND (c.scope='global' OR c.workspace_id=?)""",
+                (str(model_id), str(namespace), str(workspace_id), str(workspace_id)),
+            ).fetchone()[0])
+        return vectors >= chunks
+
+    def load_code_file_cache(self, *, workspace_id, file_states, chunk_config):
+        """Load cached per-file chunks only when the recorded stat still matches."""
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """SELECT s.path, s.size, s.mtime_ns, s.source_hash, s.chunk_count,
+                          c.payload
+                FROM retrieval_code_file_states s
+                LEFT JOIN retrieval_code_chunk_cache c
+                  ON c.workspace_id=s.workspace_id AND c.path=s.path
+                 AND c.source_hash=s.source_hash AND c.chunk_config=?
+                WHERE s.workspace_id=?""",
+                (str(chunk_config), str(workspace_id)),
+            ).fetchall()
+        wanted = {
+            str(path): (int(state["size"]), int(state["mtime_ns"]))
+            for path, state in file_states.items()
+        }
+        hashes = {}
+        cached = {}
+        counts = {}
+        for path, size, mtime_ns, source_hash, chunk_count, payload in rows:
+            if wanted.get(str(path)) != (int(size), int(mtime_ns)):
+                continue
+            hashes[str(path)] = str(source_hash)
+            counts[str(path)] = int(chunk_count)
+            if payload is None:
+                continue
+            try:
+                cached[str(path)] = json.loads(
+                    zlib.decompress(bytes(payload)).decode("utf-8")
+                )
+            except (ValueError, zlib.error, UnicodeDecodeError):
+                continue
+        return {"hashes": hashes, "chunks": cached, "counts": counts}
+
+    def save_code_chunk_cache(
+        self, *, workspace_id, path, source_hash, chunk_config, children, sections
+    ):
+        payload = zlib.compress(
+            json.dumps(
+                {
+                    "children": [chunk.to_dict() for chunk in children],
+                    "sections": [chunk.to_dict() for chunk in sections],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8"),
+            level=1,
+        )
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM retrieval_code_chunk_cache "
+                "WHERE workspace_id=? AND path=? AND chunk_config=? AND source_hash<>?",
+                (str(workspace_id), str(path), str(chunk_config), str(source_hash)),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO retrieval_code_chunk_cache "
+                "VALUES (?, ?, ?, ?, ?)",
+                (str(workspace_id), str(path), str(source_hash), str(chunk_config), payload),
+            )
+
+    def save_code_chunk_cache_batch(self, *, workspace_id, rows):
+        payloads = []
+        for row in rows:
+            payload = zlib.compress(
+                json.dumps(
+                    {
+                        "children": [chunk.to_dict() for chunk in row["children"]],
+                        "sections": [chunk.to_dict() for chunk in row["sections"]],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                level=1,
+            )
+            payloads.append(
+                (
+                    str(workspace_id),
+                    str(row["path"]),
+                    str(row["source_hash"]),
+                    str(row["chunk_config"]),
+                    payload,
+                )
+            )
+        with self._lock, self._connect() as connection:
+            connection.executemany(
+                "DELETE FROM retrieval_code_chunk_cache "
+                "WHERE workspace_id=? AND path=? AND chunk_config=? AND source_hash<>?",
+                [
+                    (str(workspace_id), row[1], row[3], row[2])
+                    for row in payloads
+                ],
+            )
+            connection.executemany(
+                "INSERT OR REPLACE INTO retrieval_code_chunk_cache VALUES (?, ?, ?, ?, ?)",
+                payloads,
+            )
+
+    def record_code_file_states(
+        self, *, workspace_id, file_states, source_hashes, chunk_config, model_id, chunk_counts
+    ):
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM retrieval_code_file_states WHERE workspace_id=?",
+                (str(workspace_id),),
+            )
+            connection.executemany(
+                "INSERT INTO retrieval_code_file_states VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        str(workspace_id), str(path), int(state["size"]),
+                        int(state["mtime_ns"]), str(source_hashes.get(path, "")),
+                        str(chunk_config), str(model_id), int(chunk_counts.get(path, 0)),
+                    )
+                    for path, state in file_states.items()
+                ],
+            )
+
+    def load_code_chunks(self, *, workspace_id):
+        with self._lock, self._connect() as connection:
+            children = connection.execute(
+                "SELECT chunk_json FROM retrieval_chunks "
+                "WHERE source_type='code' AND workspace_id=? ORDER BY chunk_id",
+                (str(workspace_id),),
+            ).fetchall()
+            section_rows = connection.execute(
+                "SELECT payload_json FROM retrieval_sections "
+                "WHERE namespace='code' AND workspace_id=?",
+                (str(workspace_id),),
+            ).fetchall()
+        sections = []
+        for (payload,) in section_rows:
+            try:
+                sections.append(json.loads(payload))
+            except ValueError:
+                continue
+        return {
+            "children": [json.loads(payload) for (payload,) in children],
+            "sections": sections,
         }
 
     def sections(self, section_ids):

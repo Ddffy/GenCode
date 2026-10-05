@@ -2,8 +2,10 @@
 
 import json
 
-from gencode.testing import ScriptedModelClient
+from conftest import collect_events, run_tool
+
 from gencode import GenCode, SessionStore, WorkspaceContext
+from gencode.testing import ScriptedModelClient
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):
@@ -25,9 +27,9 @@ def read_jsonl(path):
 def test_todo_tools_persist_state_and_emit_session_events(tmp_path):
     agent = build_agent(tmp_path)
 
-    added = agent.run_tool("todo_add", {"content": "Draft worker manager", "priority": "high"})
-    updated = agent.run_tool("todo_update", {"todo_id": "todo_1", "status": "in_progress", "note": "started"})
-    listed = agent.run_tool("todo_list", {})
+    added = run_tool(agent, "todo_add", {"content": "Draft worker manager", "priority": "high"})
+    updated = run_tool(agent, "todo_update", {"todo_id": "todo_1", "status": "in_progress", "note": "started"})
+    listed = run_tool(agent, "todo_list", {})
 
     assert "todo_1" in added
     assert "in_progress" in updated
@@ -48,7 +50,7 @@ def test_todo_tools_are_available_in_plan_mode_and_prompt_context(tmp_path):
     assert "todo_update" in agent.available_tools()
     assert "todo_list" in agent.available_tools()
 
-    agent.run_tool("todo_add", {"content": "Write active plan", "status": "in_progress"})
+    run_tool(agent, "todo_add", {"content": "Write active plan", "status": "in_progress"})
     prompt = agent.prompt("continue")
 
     assert "Task ledger:" in prompt
@@ -89,7 +91,7 @@ def test_soft_final_readiness_reminds_for_current_run_high_priority_todo(tmp_pat
         max_steps=3,
     )
 
-    events = list(agent.engine.run_turn("track Gate6"))
+    events = collect_events(agent.engine.run_turn("track Gate6"))
 
     assert [event["type"] for event in events if event["type"] == "runtime_notice"] == [
         "runtime_notice"

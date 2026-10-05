@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .types import RetrievalChunk
@@ -164,7 +164,7 @@ def pack_pieces(pieces, *, chunk_size_tokens, overlap_ratio):
     # than it would make consecutive chunks barely advance.
     overlap_tokens = min(
         budget - 1,
-        max(0, int(round(budget * float(overlap_ratio or 0.0)))),
+        max(0, round(budget * float(overlap_ratio or 0.0))),
     )
     chunks = []
     current = []
@@ -275,6 +275,8 @@ class ChunkSet:
 
     children: tuple
     sections: tuple
+    file_hashes: dict = field(default_factory=dict)
+    file_chunk_counts: dict = field(default_factory=dict)
 
 
 def _wiki_identity(record, *, parent_id, workspace_id, path):
@@ -402,6 +404,9 @@ def chunk_code_repository(
     cache_dir=None,
     child_chunk_tokens=DEFAULT_CHILD_CHUNK_TOKENS,
     child_chunk_overlap=DEFAULT_CHILD_CHUNK_OVERLAP,
+    index_cache=None,
+    source_states=None,
+    chunk_config="",
 ):
     """Chunk a repository into searchable children plus their whole definitions.
 
@@ -414,10 +419,51 @@ def chunk_code_repository(
     from ..repomap import graph as graphlib
 
     root = Path(root).resolve()
-    tags_by_file = graphlib.load_tags(root, cache_dir=cache_dir)
+    source_states = (
+        source_states if source_states is not None
+        else graphlib.collect_source_file_states(root)
+    )
+    previous = (
+        index_cache.load_code_file_cache(
+            workspace_id=workspace_id,
+            file_states=source_states,
+            chunk_config=chunk_config,
+        )
+        if index_cache is not None
+        else {"hashes": {}, "chunks": {}, "counts": {}}
+    )
+    missing_tags = {
+        path: state
+        for path, state in source_states.items()
+        if path not in previous["chunks"]
+    }
+    tags_by_file = graphlib.load_tags(
+        root,
+        cache_dir=cache_dir,
+        source_states=missing_tags,
+    )
     chunks = []
     sections = []
-    for relative, file_tags in sorted(tags_by_file.items()):
+    file_hashes = {}
+    file_chunk_counts = {}
+    new_file_cache = []
+    for relative in sorted(source_states):
+        cached = previous["chunks"].get(relative)
+        if cached is not None:
+            file_hashes[relative] = previous["hashes"][relative]
+            file_chunk_counts[relative] = len(cached.get("children", []))
+            chunks.extend(
+                RetrievalChunk.from_dict(value)
+                for value in cached.get("children", [])
+            )
+            sections.extend(
+                RetrievalChunk.from_dict(value)
+                for value in cached.get("sections", [])
+            )
+            continue
+        file_tags = tags_by_file.get(relative)
+        if file_tags is None:
+            continue
         path = root / relative
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -431,6 +477,8 @@ def chunk_code_repository(
         parent_summary = _code_parent_summary(file_tags)
         if not definitions:
             definitions = [(Path(relative).stem, 1)]
+        file_children = []
+        file_sections = []
         for index, (name, start) in enumerate(definitions):
             next_start = definitions[index + 1][1] if index + 1 < len(definitions) else len(lines) + 1
             end = min(len(lines), max(start, next_start - 1))
@@ -451,7 +499,7 @@ def chunk_code_repository(
                 "status": "active",
                 "scope": "workspace",
             }
-            sections.append(
+            file_sections.append(
                 RetrievalChunk(
                     chunk_id=section_id,
                     section_id=section_id,
@@ -476,7 +524,7 @@ def chunk_code_repository(
                 body = clean_text(text)
                 if not body:
                     continue
-                chunks.append(
+                file_children.append(
                     RetrievalChunk(
                         chunk_id=_stable_id(
                             parent_id, name, start, piece_index, file_tags.sha256
@@ -499,7 +547,30 @@ def chunk_code_repository(
                         **common,
                     )
                 )
-    return ChunkSet(children=tuple(chunks), sections=tuple(sections))
+        file_hashes[relative] = file_tags.sha256
+        file_chunk_counts[relative] = len(file_children)
+        chunks.extend(file_children)
+        sections.extend(file_sections)
+        if index_cache is not None:
+            new_file_cache.append(
+                {
+                    "path": relative,
+                    "source_hash": file_tags.sha256,
+                    "chunk_config": chunk_config,
+                    "children": file_children,
+                    "sections": file_sections,
+                }
+            )
+    if index_cache is not None and new_file_cache:
+        index_cache.save_code_chunk_cache_batch(
+            workspace_id=workspace_id, rows=new_file_cache
+        )
+    return ChunkSet(
+        children=tuple(chunks),
+        sections=tuple(sections),
+        file_hashes=file_hashes,
+        file_chunk_counts=file_chunk_counts,
+    )
 
 
 def _code_parent_summary(file_tags):

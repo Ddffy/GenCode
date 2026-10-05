@@ -12,16 +12,14 @@ from .workspace import now
 
 
 def resume_runtime_session(runtime, session_id):
-    _shutdown_workers(runtime)
     runtime.session = runtime.session_store.load(session_id)
     _rebind(runtime, emit_started=False)
     return runtime.session["id"]
 
 
 def clear_runtime_session(runtime):
-    _shutdown_workers(runtime)
     runtime.session = {
-        "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
+        "id": datetime.now().astimezone().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
         "created_at": now(),
         "workspace_root": runtime.workspace.repo_root,
         "history": [],
@@ -67,10 +65,3 @@ def _rebind(runtime, emit_started):
     runtime.current_run_dir = None
     runtime.current_task_state = None
     runtime.refresh_prefix(force=True)
-
-
-def _shutdown_workers(runtime):
-    manager = getattr(runtime, "worker_manager", None)
-    shutdown = getattr(manager, "shutdown", None)
-    if callable(shutdown):
-        shutdown()

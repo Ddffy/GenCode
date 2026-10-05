@@ -1,5 +1,6 @@
 """Runtime permission decisions for tool execution."""
 
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,25 @@ class PermissionChecker:
         self.runtime = runtime
 
     def check(self, tool, args):
+        decision = self._check_without_approval(tool, args)
+        if decision is not None:
+            return decision
+        if self.runtime.approve(tool.name, args):
+            return PermissionDecision.allow("approval_prompt")
+        return PermissionDecision.deny("approval_denied", "approval_denied")
+
+    async def check_async(self, tool, args):
+        decision = self._check_without_approval(tool, args)
+        if decision is not None:
+            return decision
+        result = self.runtime.approve_async(tool.name, args)
+        if inspect.isawaitable(result):
+            result = await result
+        if result:
+            return PermissionDecision.allow("approval_prompt")
+        return PermissionDecision.deny("approval_denied", "approval_denied")
+
+    def _check_without_approval(self, tool, args):
         args = args or {}
         profile = self.runtime.active_tool_profile
         if not profile.allows(tool.name):
@@ -48,9 +68,7 @@ class PermissionChecker:
             return PermissionDecision.allow("approval_auto")
         if self.runtime.approval_policy == "never":
             return PermissionDecision.deny("approval_denied", "approval_denied")
-        if self.runtime.approve(tool.name, args):
-            return PermissionDecision.allow("approval_prompt")
-        return PermissionDecision.deny("approval_denied", "approval_denied")
+        return None
 
     def _check_plan(self, tool, args):
         if tool.read_only:

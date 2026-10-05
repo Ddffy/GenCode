@@ -1,18 +1,23 @@
 import argparse
+import asyncio
 import json
 import sys
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import resolve_provider_config
-from .evaluator import run_fixed_benchmark
-from ..testing import ScriptedModelClient
-from ..providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from ..core.runtime import GenCode, SessionStore
 from ..core.workspace import WorkspaceContext
-from ..features.memory import LayeredMemory, compute_anchor_hash, retrieval_view_structured
+from ..features.memory import (
+    LayeredMemory,
+    compute_anchor_hash,
+    retrieval_view_structured,
+)
+from ..providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
+from ..testing import ScriptedModelClient
+from .evaluator import run_fixed_benchmark
 
 METRICS_SCHEMA_VERSION = 2
 LOCAL_BENCHMARK_ARTIFACT_DIR = Path("_local/benchmark/artifacts")
@@ -27,6 +32,10 @@ DEFAULT_MEMORY_LIVE_SMOKE_V1_PATH = LOCAL_BENCHMARK_ARTIFACT_DIR / "memory-live-
 DEFAULT_MEMORY_AGENT_EVAL_V1_PATH = LOCAL_BENCHMARK_ARTIFACT_DIR / "memory-agent-eval-v1.json"
 DEFAULT_MEMORY_CHALLENGE_V1_PATH = LOCAL_BENCHMARK_ARTIFACT_DIR / "memory-challenge-v1.json"
 DEFAULT_CORE_REPORT_PATH = Path("docs/metrics/gencode-benchmark-core-report.md")
+
+
+def _run_tool(agent, name, args):
+    return asyncio.run(_run_tool(agent, name, args))
 
 RUN_NAMES = (
     "harness_regression",
@@ -60,7 +69,7 @@ def _parse_iso8601(value):
         return None
     try:
         return datetime.fromisoformat(str(value))
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -337,8 +346,8 @@ def run_memory_dependency_experiment(repetitions=3):
         "memory_irrelevant": [],
     }
     for _ in range(int(repetitions)):
-        for variant in variants:
-            variants[variant].append(_run_memory_variant(variant))
+        for variant, rows in variants.items():
+            rows.append(_run_memory_variant(variant))
 
     results = {}
     for variant, rows in variants.items():
@@ -433,11 +442,11 @@ def run_large_scale_memory_experiment(repetitions=5):
     }
     for task in MEMORY_EXPERIMENT_TASKS:
         for _ in range(repetitions):
-            for variant in variants:
+            for variant, rows in variants.items():
                 row = _run_memory_task_variant(task, variant)
                 row["task_id"] = task["id"]
                 row["category"] = task["category"]
-                variants[variant].append(row)
+                rows.append(row)
     category_counts = {}
     for task in MEMORY_EXPERIMENT_TASKS:
         category_counts[task["category"]] = category_counts.get(task["category"], 0) + 1
@@ -713,32 +722,32 @@ def _security_agent(workspace_root, approval_policy="auto", read_only=False):
 def _scenario_invalid_patch_nonunique(workspace_root):
     (workspace_root / "sample.txt").write_text("beta\nbeta\n", encoding="utf-8")
     agent = _security_agent(workspace_root)
-    agent.run_tool("patch_file", {"path": "sample.txt", "old_text": "beta", "new_text": "locked"})
+    _run_tool(agent, "patch_file", {"path": "sample.txt", "old_text": "beta", "new_text": "locked"})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_invalid_patch_missing_field(workspace_root):
     (workspace_root / "sample.txt").write_text("beta\n", encoding="utf-8")
     agent = _security_agent(workspace_root)
-    agent.run_tool("patch_file", {"path": "sample.txt", "old_text": "beta"})
+    _run_tool(agent, "patch_file", {"path": "sample.txt", "old_text": "beta"})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_timeout_out_of_range(workspace_root):
     agent = _security_agent(workspace_root)
-    agent.run_tool("run_shell", {"command": "echo hi", "timeout": 121})
+    _run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 121})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_empty_command(workspace_root):
     agent = _security_agent(workspace_root)
-    agent.run_tool("run_shell", {"command": "", "timeout": 20})
+    _run_tool(agent, "run_shell", {"command": "", "timeout": 20})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_empty_agent_prompt(workspace_root):
     agent = _security_agent(workspace_root)
-    agent.run_tool("agent", {"description": "Inspect", "prompt": "", "subagent_type": "Explore"})
+    _run_tool(agent, "agent", {"description": "Inspect", "prompt": "", "subagent_type": "Explore"})
     return dict(agent._last_tool_result_metadata)
 
 
@@ -746,7 +755,7 @@ def _scenario_path_escape_read(workspace_root):
     outside = workspace_root.parent / f"{workspace_root.name}-outside.txt"
     outside.write_text("outside\n", encoding="utf-8")
     agent = _security_agent(workspace_root)
-    agent.run_tool("read_file", {"path": "../outside.txt"})
+    _run_tool(agent, "read_file", {"path": "../outside.txt"})
     return dict(agent._last_tool_result_metadata)
 
 
@@ -755,25 +764,25 @@ def _scenario_symlink_escape(workspace_root):
     outside.write_text("outside\n", encoding="utf-8")
     (workspace_root / "linked.txt").symlink_to(outside)
     agent = _security_agent(workspace_root)
-    agent.run_tool("read_file", {"path": "linked.txt"})
+    _run_tool(agent, "read_file", {"path": "linked.txt"})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_search_escape(workspace_root):
     agent = _security_agent(workspace_root)
-    agent.run_tool("search", {"pattern": "abc", "path": "../outside"})
+    _run_tool(agent, "search", {"pattern": "abc", "path": "../outside"})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_approval_denied(workspace_root):
     agent = _security_agent(workspace_root, approval_policy="never")
-    agent.run_tool("run_shell", {"command": "echo hi", "timeout": 20})
+    _run_tool(agent, "run_shell", {"command": "echo hi", "timeout": 20})
     return dict(agent._last_tool_result_metadata)
 
 
 def _scenario_read_only_block(workspace_root):
     agent = _security_agent(workspace_root, read_only=True)
-    agent.run_tool("write_file", {"path": "x.txt", "content": "nope"})
+    _run_tool(agent, "write_file", {"path": "x.txt", "content": "nope"})
     return dict(agent._last_tool_result_metadata)
 
 
@@ -782,9 +791,9 @@ def _scenario_repeated_call(workspace_root):
     agent = _security_agent(workspace_root)
     args = {"path": "README.md", "start": 1, "end": 1}
     for _ in range(2):
-        result = agent.run_tool("read_file", args)
+        result = _run_tool(agent, "read_file", args)
         agent.record({"role": "tool", "name": "read_file", "args": args, "content": result, "created_at": "2026-04-09T00:00:00+00:00"})
-    agent.run_tool("read_file", args)
+    _run_tool(agent, "read_file", args)
     return dict(agent._last_tool_result_metadata)
 
 
@@ -951,7 +960,7 @@ def run_provider_experiments(benchmark_path, workspace_root, artifact_root, max_
             result["provider"] = provider_name
             result["model"] = profile["model"]
             providers.append(result)
-        except Exception as exc:
+        except Exception as exc:  # Preserve a failed provider row and continue the matrix.  # noqa: BLE001
             providers.append(
                 {
                     "provider": provider_name,
@@ -1014,7 +1023,7 @@ def run_real_memory_experiment(provider="gpt", repetitions=1):
     for task in MEMORY_EXPERIMENT_TASKS:
         category_counts[task["category"]] = category_counts.get(task["category"], 0) + 1
         for _ in range(repetitions):
-            for variant in variants:
+            for variant, rows in variants.items():
                 with tempfile.TemporaryDirectory(prefix="gencode-real-memory-") as temp_dir:
                     workspace_root = Path(temp_dir)
                     (workspace_root / "README.md").write_text("demo\n", encoding="utf-8")
@@ -1044,7 +1053,7 @@ def run_real_memory_experiment(provider="gpt", repetitions=1):
                             "Reply with the exact line only. If you are not certain, verify with tools instead of guessing."
                         )
                     answer = agent.ask(prompt)
-                    variants[variant].append(
+                    rows.append(
                         {
                             "task_id": task["id"],
                             "category": task["category"],
@@ -1257,8 +1266,8 @@ def collect_resume_metrics(
         context = run_real_context_experiment(provider=real_provider, repetitions=context_repetitions)
         security = run_real_security_experiment_suite(provider=real_provider, repetitions=security_repetitions)
         stress = {
-            "full": {"prompt_chars": int(round(context["summary"].get("avg_full_prompt_chars", 0.0)))},
-            "no_context_reduction": {"prompt_chars": int(round(context["summary"].get("avg_raw_prompt_chars", 0.0)))},
+            "full": {"prompt_chars": round(context["summary"].get("avg_full_prompt_chars", 0.0))},
+            "no_context_reduction": {"prompt_chars": round(context["summary"].get("avg_raw_prompt_chars", 0.0))},
         }
     else:
         stress = build_stress_agent_metrics()
@@ -1828,7 +1837,7 @@ def run_context_ablation_v2(artifact_path=DEFAULT_CONTEXT_ABLATION_V2_PATH, repe
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "context-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "config_count": payload["config_count"],
         "configs": payload["configs"],
         "summary": payload["summary"],
@@ -1841,7 +1850,7 @@ def run_memory_ablation_v2(artifact_path=DEFAULT_MEMORY_ABLATION_V2_PATH, repeti
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "memory-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "task_count": payload["task_count"],
         "runs_per_variant": payload["runs_per_variant"],
         "category_counts": payload["category_counts"],
@@ -1856,12 +1865,12 @@ def run_recovery_ablation_v2(artifact_path=DEFAULT_RECOVERY_ABLATION_V2_PATH, re
     variants = {"resume_enabled": [], "resume_disabled": []}
     for task in RECOVERY_ABLATION_TASKS:
         for _ in range(repetitions):
-            for variant in variants:
-                variants[variant].append(_run_recovery_task_variant(task, variant))
+            for variant, rows in variants.items():
+                rows.append(_run_recovery_task_variant(task, variant))
     artifact = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "artifact_type": "recovery-ablation-v2",
-        "captured_at": datetime.utcnow().isoformat() + "Z",
+        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "task_count": len(RECOVERY_ABLATION_TASKS),
         "variants": {
             variant: {
@@ -2088,7 +2097,10 @@ def _run_metrics_cli(name):
         run_context_ablation_v2()
         return 0
     if name == "context_ab":
-        from .context_cost import run_deterministic_prompt_experiment, write_experiment_artifacts
+        from .context_cost import (
+            run_deterministic_prompt_experiment,
+            write_experiment_artifacts,
+        )
 
         output_dir = Path("artifacts/context-ab-v1")
         payload = run_deterministic_prompt_experiment(output_dir, repetitions=3)

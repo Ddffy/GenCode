@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -25,7 +26,7 @@ from .rerank import (
     resolve_conflicts,
 )
 from .router import RetrievalRouter
-from .types import RetrievalResponse
+from .types import RetrievalChunk, RetrievalResponse
 
 
 class HybridRetrievalService:
@@ -71,6 +72,8 @@ class HybridRetrievalService:
         self.fallback_reranker = DeterministicReranker()
         self.fine_reranker = reranker or self._build_fine_reranker()
         self._cache = OrderedDict()
+        self._code_sync_lock = threading.Lock()
+        self._code_sync_roots = set()
 
     def register_retriever(self, plugin):
         self._cache.clear()
@@ -98,28 +101,106 @@ class HybridRetrievalService:
         self._emit("retrieval_index_synced", {"source_type": "wiki", **result})
         return result
 
-    def sync_code(self, repo_root, *, cache_dir=None, force=False):
+    def sync_code(
+        self, repo_root, *, cache_dir=None, force=False, embed=True, emit_event=True
+    ):
+        if not self.config.enabled:
+            return {"changed": False, "chunks": 0, "disabled": True}
+        from ..repomap import graph as graphlib
+
+        repo_root = Path(repo_root).resolve()
+        file_states = graphlib.collect_source_file_states(repo_root)
+        chunk_config = (
+            f"code-v2:{self.config.child_chunk_tokens}:"
+            f"{self.config.child_chunk_overlap:.4f}:"
+            f"tree-sitter-{graphlib.CACHE_SCHEMA_VERSION}"
+        )
+        snapshot = self.index.code_snapshot_matches(
+            self.workspace_id, file_states, chunk_config=chunk_config
+        )
+        model_id = str(getattr(self.embedder, "model_id", "") or "disabled")
+        dense_complete = self.index.code_dense_complete(
+            namespace="code", workspace_id=self.workspace_id, model_id=model_id
+        )
+        if snapshot is not None and not force and (
+            not embed or self.embedder is None or dense_complete
+        ):
+            return {
+                "changed": False,
+                "chunks": snapshot["chunks"],
+                "dense_complete": dense_complete,
+                "files_seen": len(file_states),
+                "index_reused": True,
+            }
+        if snapshot is not None:
+            cached = self.index.load_code_chunks(workspace_id=self.workspace_id)
+            children = [RetrievalChunk.from_dict(row) for row in cached["children"]]
+            sections = [RetrievalChunk.from_dict(row) for row in cached["sections"]]
+            result = self.index.sync(
+                children,
+                sections=sections,
+                namespace="code",
+                workspace_id=self.workspace_id,
+                embedder=self.embedder,
+                embedding_batch_size=self.config.embedding_batch_size,
+                force=force,
+            )
+            result.update({"files_seen": len(file_states), "index_reused": True})
+            if emit_event:
+                self._emit("retrieval_index_synced", {"source_type": "code", **result})
+            return result
+
         chunked = chunk_code_repository(
             repo_root,
             workspace_id=self.workspace_id,
             cache_dir=cache_dir,
             child_chunk_tokens=self.config.child_chunk_tokens,
             child_chunk_overlap=self.config.child_chunk_overlap,
+            index_cache=self.index,
+            source_states=file_states,
+            chunk_config=chunk_config,
         )
-        if not self.config.enabled:
-            return {"changed": False, "chunks": len(chunked.children), "disabled": True}
         result = self.index.sync(
             chunked.children,
             sections=chunked.sections,
             namespace="code",
             workspace_id=self.workspace_id,
-            embedder=self.embedder,
+            embedder=self.embedder if embed else None,
             embedding_batch_size=self.config.embedding_batch_size,
             force=force,
+            preserve_model=not embed,
+        )
+        self.index.record_code_file_states(
+            workspace_id=self.workspace_id,
+            file_states=file_states,
+            source_hashes=chunked.file_hashes,
+            chunk_config=chunk_config,
+            model_id=model_id,
+            chunk_counts=chunked.file_chunk_counts,
         )
         self._cache.clear()
-        self._emit("retrieval_index_synced", {"source_type": "code", **result})
+        result.update({"files_seen": len(file_states), "index_reused": False})
+        if emit_event:
+            self._emit("retrieval_index_synced", {"source_type": "code", **result})
         return result
+
+    def start_background_code_sync(self, repo_root, *, cache_dir=None):
+        """Finish missing dense vectors without holding up a user turn."""
+        root = str(Path(repo_root).resolve())
+        with self._code_sync_lock:
+            if root in self._code_sync_roots or self.embedder is None:
+                return False
+            self._code_sync_roots.add(root)
+
+        def finish():
+            try:
+                self.sync_code(root, cache_dir=cache_dir, embed=True, emit_event=False)
+            finally:
+                with self._code_sync_lock:
+                    self._code_sync_roots.discard(root)
+
+        threading.Thread(target=finish, name="gencode-dense-index", daemon=True).start()
+        return True
 
     def retrieve(
         self,
@@ -131,6 +212,7 @@ class HybridRetrievalService:
         freshness_checker=None,
         channels=(),
         use_cache=True,
+        rerank=True,
     ):
         started = time.perf_counter()
         source_types = tuple(str(value) for value in source_types)
@@ -157,7 +239,9 @@ class HybridRetrievalService:
             )
         plan = understand_query(query, source_types=source_types)
         enabled_channels = tuple(channels) or self._channels_for(source_types)
-        cache_key = self._cache_key(query, source_types, allowed_paths, enabled_channels)
+        cache_key = self._cache_key(
+            query, source_types, allowed_paths, enabled_channels, rerank=rerank
+        )
         if use_cache and freshness_checker is None and cache_key in self._cache:
             cached = self._cache.pop(cache_key)
             self._cache[cache_key] = cached
@@ -212,7 +296,7 @@ class HybridRetrievalService:
         reranker_requested = getattr(
             self.fine_reranker, "model_id", self.fine_reranker.__class__.__name__
         )
-        active_reranker = self.fine_reranker
+        active_reranker = self.fine_reranker if rerank else self.fallback_reranker
         try:
             selected = active_reranker.rerank(query, candidates, top_k=final_limit)
         except Exception as exc:  # noqa: BLE001 - remote reranker boundary
@@ -271,11 +355,14 @@ class HybridRetrievalService:
         )
         return response
 
-    def route(self, *, source_type, corpus_size=0, lexical_confidence=0.0):
+    def route(
+        self, *, source_type, corpus_size=0, lexical_confidence=0.0, force_hybrid=False
+    ):
         return self.router.route(
             source_type=source_type,
             corpus_size=corpus_size,
             lexical_confidence=lexical_confidence,
+            force_hybrid=force_hybrid,
         )
 
     def record_feedback(self, *, query, citation_ids=(), accepted=None, details=None):
@@ -428,13 +515,14 @@ class HybridRetrievalService:
             "best_score": best_score,
         }
 
-    def _cache_key(self, query, source_types, allowed_paths, channels):
+    def _cache_key(self, query, source_types, allowed_paths, channels, *, rerank=True):
         manifests = self.index.stats().get("manifests", [])
         signature = tuple(
             sorted((row["namespace"], row["signature"]) for row in manifests)
         )
         return (
-            str(query), tuple(source_types), tuple(allowed_paths), tuple(channels), signature
+            str(query), tuple(source_types), tuple(allowed_paths), tuple(channels),
+            bool(rerank), signature,
         )
 
     def _remember(self, key, response):
