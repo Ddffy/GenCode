@@ -30,9 +30,8 @@ def run_acceptance(output_dir, include_live=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     scenarios = [
         _run_scenario(output_dir, "bugfix_pytest", _scenario_bugfix_pytest),
-        _run_scenario(output_dir, "plan_todo_explore", _scenario_plan_todo_explore),
+        _run_scenario(output_dir, "plan_todo_artifact", _scenario_plan_todo_explore),
         _run_scenario(output_dir, "skill_inline", _scenario_skill_inline),
-        _run_scenario(output_dir, "worker_write_scope", _scenario_worker_write_scope),
         _run_scenario(output_dir, "resume_continuation", _scenario_resume_continuation),
         _run_scenario(output_dir, "security_rejection", _scenario_security_rejection),
         _run_scenario(output_dir, "context_pressure", _scenario_context_pressure),
@@ -158,7 +157,6 @@ def _scenario_plan_todo_explore(output_dir, workspace):
         workspace,
         [
             '<tool>{"name":"todo_add","args":{"content":"Draft Gate8 plan","status":"in_progress","priority":"high"}}</tool>',
-            '<tool>{"name":"agent","args":{"description":"Inspect fixture","prompt":"Read README.md","subagent_type":"Explore"}}</tool>',
             '<tool>{"name":"read_file","args":{"path":"README.md","start":1,"end":1}}</tool>',
             "<final>Fixture inspected.</final>",
             '<tool>{"name":"todo_update","args":{"todo_id":"todo_1","status":"done","note":"plan written"}}</tool>',
@@ -168,17 +166,16 @@ def _scenario_plan_todo_explore(output_dir, workspace):
         max_steps=6,
     )
     agent.enter_plan_mode("gate8")
-    answer = agent.ask("Plan Gate8 with todo and Explore evidence")
+    answer = agent.ask("Plan Gate8 with todo and README evidence")
     return _finalize(
         output_dir,
         workspace,
         agent,
-        "plan_todo_explore",
+        "plan_todo_artifact",
         checks=[
             _check("answer", answer == "Gate8 plan ready.", answer),
             _check("plan_file", (workspace / ".gencode" / "plans" / "gate8-plan.md").is_file()),
             _check("todo_done", agent.session["todos"]["items"][0]["status"] == "done"),
-            _check("explore_worker", agent.session["workers"]["items"][0]["subagent_type"] == "Explore"),
         ],
     )
 
@@ -216,36 +213,6 @@ Inspect $ARGUMENTS and report the evidence path.
             _check("answer", answer == "Skill evidence checked.", answer),
             _check("skill_invoked", any(event["event"] == "skill_invoked" for event in events)),
             _check("skill_completed", any(event["event"] == "skill_completed" for event in events)),
-        ],
-    )
-
-
-def _scenario_worker_write_scope(output_dir, workspace):
-    _write_readme(workspace, "Gate8 worker fixture.\n")
-    agent = _build_agent(
-        workspace,
-        [
-            '<tool>{"name":"agent","args":{"description":"Write scoped notes","prompt":"Create first note","subagent_type":"worker","write_scope":["notes"]}}</tool>',
-            '<tool name="write_file" path="notes/first.txt"><content>first\n</content></tool>',
-            "<final>First note written.</final>",
-            '<tool>{"name":"send_message","args":{"to":"agent_1","message":"Create second note"}}</tool>',
-            '<tool name="write_file" path="notes/second.txt"><content>second\n</content></tool>',
-            "<final>Second note written.</final>",
-            "<final>Scoped worker completed.</final>",
-        ],
-        max_steps=6,
-    )
-    answer = agent.ask("Use a scoped worker twice")
-    return _finalize(
-        output_dir,
-        workspace,
-        agent,
-        "worker_write_scope",
-        checks=[
-            _check("answer", answer == "Scoped worker completed.", answer),
-            _check("first_note", (workspace / "notes" / "first.txt").read_text(encoding="utf-8") == "first\n"),
-            _check("second_note", (workspace / "notes" / "second.txt").read_text(encoding="utf-8") == "second\n"),
-            _check("write_scope", agent.session["workers"]["items"][0]["write_scope"] == ["notes"]),
         ],
     )
 
@@ -305,19 +272,15 @@ def _scenario_security_rejection(output_dir, workspace):
         workspace,
         [
             '<tool>{"name":"read_file","args":{"path":"../outside.txt","start":1,"end":1}}</tool>',
-            '<tool>{"name":"agent","args":{"description":"Bad scoped write","prompt":"Write outside scope","subagent_type":"worker","write_scope":["allowed"]}}</tool>',
-            '<tool name="write_file" path="blocked/out.txt"><content>nope\n</content></tool>',
-            "<final>Blocked scoped write.</final>",
             '<tool>{"name":"run_shell","args":{"command":"echo $GENCODE_ACCEPTANCE_SECRET","timeout":5}}</tool>',
             "<final>Path escape blocked.</final>",
         ],
-        max_steps=5,
+        max_steps=3,
     )
     try:
         answer = agent.ask("Try unsafe workspace and secret operations")
         events = _read_events(agent)
         trace_text = (agent.current_run_dir / "trace.jsonl").read_text(encoding="utf-8")
-        worker_error_codes = agent.session["workers"]["items"][0].get("tool_error_codes", [])
         return _finalize(
             output_dir,
             workspace,
@@ -326,7 +289,6 @@ def _scenario_security_rejection(output_dir, workspace):
             checks=[
                 _check("answer", answer == "Path escape blocked.", answer),
                 _check("invalid_arguments", any(event.get("tool_error_code") == "invalid_arguments" for event in events)),
-                _check("write_scope_blocked", "write_scope_mismatch" in worker_error_codes),
                 _check("no_outside_file", not (output_dir / "outside.txt").exists()),
                 _check("no_blocked_write", not (workspace / "blocked" / "out.txt").exists()),
                 _check("secret_redacted", "gencode-secret-value-123" not in trace_text),

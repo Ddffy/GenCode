@@ -11,15 +11,6 @@ from ..core.workspace import IGNORED_PATH_NAMES
 from . import knowledge as knowledge_tools
 from . import media as media_tools
 from . import repomap as repomap_tools
-from .agents import (
-    AGENT_TOOL_EXAMPLES,
-    AGENT_TOOL_NAMES,
-    AGENT_TOOL_SPECS,
-    tool_agent,
-    tool_send_message,
-    tool_task_stop,
-    validate_agent_runtime,
-)
 from .ask_user import (
     ASK_USER_TOOL_EXAMPLES,
     ASK_USER_TOOL_SPECS,
@@ -33,7 +24,6 @@ from .plan import (
     tool_exit_plan_mode,
 )
 from .schemas import (
-    AgentArgs,
     AskUserArgs,
     EnterPlanModeArgs,
     ExitPlanModeArgs,
@@ -44,8 +34,6 @@ from .schemas import (
     RepoMapArgs,
     RunShellArgs,
     SearchArgs,
-    SendMessageArgs,
-    TaskStopArgs,
     TodoAddArgs,
     TodoListArgs,
     TodoUpdateArgs,
@@ -72,9 +60,6 @@ _TOOL_SCHEMAS = {
     "todo_add": TodoAddArgs,
     "todo_update": TodoUpdateArgs,
     "todo_list": TodoListArgs,
-    "agent": AgentArgs,
-    "send_message": SendMessageArgs,
-    "task_stop": TaskStopArgs,
     "enter_plan_mode": EnterPlanModeArgs,
     "exit_plan_mode": ExitPlanModeArgs,
     "ask_user": AskUserArgs,
@@ -119,7 +104,6 @@ BASE_TOOL_SPECS = {
     **knowledge_tools.TOOL_SPECS,
     **media_tools.MEDIA_TOOL_SPECS,
     **TODO_TOOL_SPECS,
-    **AGENT_TOOL_SPECS,
     **PLAN_TOOL_SPECS,
     **ASK_USER_TOOL_SPECS,
     **repomap_tools.REPO_MAP_TOOL_SPECS,
@@ -134,7 +118,6 @@ TOOL_EXAMPLES = {
     **knowledge_tools.TOOL_EXAMPLES,
     **media_tools.MEDIA_TOOL_EXAMPLES,
     **TODO_TOOL_EXAMPLES,
-    **AGENT_TOOL_EXAMPLES,
     **PLAN_TOOL_EXAMPLES,
     **ASK_USER_TOOL_EXAMPLES,
     **repomap_tools.REPO_MAP_TOOL_EXAMPLES,
@@ -159,18 +142,6 @@ def build_tool_registry(agent):
 async def _async_tool_runner(name, agent, args):
     if name == "run_shell":
         return await tool_run_shell_async(agent, args)
-    if name == "agent":
-        return dumps_agent_payload(await agent.worker_manager.spawn(
-            args["description"], args["prompt"],
-            subagent_type=args.get("subagent_type", "worker"),
-            write_scope=args.get("write_scope", []),
-        ))
-    if name == "send_message":
-        return dumps_agent_payload(await agent.worker_manager.continue_task(
-            args["to"], args["message"]
-        ))
-    if name == "task_stop":
-        return dumps_agent_payload(await agent.worker_manager.stop_task(args["task_id"]))
     if name == "ask_user":
         return await agent.ask_user_async(
             str(args["question"]), choices=args.get("choices", []) or []
@@ -201,9 +172,6 @@ def _consume_task_exception(task):
         task.exception()
 
 
-def dumps_agent_payload(payload):
-    import json
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 def tool_example(name):
     return TOOL_EXAMPLES.get(name, "")
 def build_native_tool_definitions(agent):
@@ -274,8 +242,6 @@ def validate_tool(agent, name, args):
         if count != 1:
             raise ValueError(f"old_text must occur exactly once, found {count}")
 
-    elif name in AGENT_TOOL_NAMES:
-        validate_agent_runtime(agent, name, args)
 
 
 def tool_list_files(agent, args):
@@ -402,9 +368,6 @@ _TOOL_RUNNERS = {
     "todo_add": tool_todo_add,
     "todo_update": tool_todo_update,
     "todo_list": tool_todo_list,
-    "agent": tool_agent,
-    "send_message": tool_send_message,
-    "task_stop": tool_task_stop,
     "enter_plan_mode": tool_enter_plan_mode,
     "exit_plan_mode": tool_exit_plan_mode,
     "ask_user": tool_ask_user,

@@ -83,7 +83,7 @@ class HumanScenarioRunner:
             self.s21_prior_read_required,
             self.s26_long_shell_output_artifact,
             self.s32_project_skill_arguments,
-            self.s37_explore_subagent,
+            self.s37_goal_entrypoint,
             self.s43_remember_daily_log,
             self.s50_path_traversal_and_redaction,
         ]
@@ -106,8 +106,6 @@ class HumanScenarioRunner:
             self.s16_plan_final_gate,
             self.s17_absolute_plan_path,
             self.s18_plan_path_escape_rejected,
-            self.s19_plan_allows_explore,
-            self.s20_plan_rejects_worker_write,
             self.s21_prior_read_required,
             self.s22_new_file_then_overwrite_requires_read,
             self.s23_self_authored_patch,
@@ -124,12 +122,6 @@ class HumanScenarioRunner:
             self.s34_fork_skill_keeps_parent_history,
             self.s35_prompt_only_skill,
             self.s36_invalid_skill_frontmatter_diagnostic,
-            self.s37_explore_subagent,
-            self.s38_worker_write_scope,
-            self.s39_worker_continuation,
-            self.s40_running_worker_send_guard,
-            self.s41_task_stop_worker,
-            self.s42_clear_stops_worker,
             self.s43_remember_daily_log,
             self.s44_dream_writes_memory,
             self.s45_secret_memory_rejected,
@@ -348,7 +340,9 @@ allowed-tools: read_file, write_file
             check("command_exit_0", command.returncode == 0),
             check("help_lists_commands", "Commands:" in stdout),
             check("help_lists_memory", "/memory" in stdout),
-            check("help_lists_subagent", "/subagent" in stdout),
+            check("help_lists_goal", "/goal" in stdout),
+            check("goal_command_available", "/goal" in stdout),
+            check("legacy_agent_commands_absent", "/agents" not in stdout and "/subagent" not in stdout),
         ]
         return self.result("S07", "--repl + /help", "PTY-style stdin REPL", workspace, [command], checks)
 
@@ -394,13 +388,13 @@ allowed-tools: read_file, write_file
             "S10",
             workspace,
             "from gencode.commands.slash import suggest_commands\n"
-            "items = suggest_commands('/sub')\n"
+            "items = suggest_commands('/go')\n"
             "print(items[0].name if items else '')\n",
         )
         stdout = self.read_log(command.stdout_path)
         checks = [
             check("command_exit_0", command.returncode == 0),
-            check("subagent_suggested", "subagent" in stdout),
+            check("goal_suggested", "goal" in stdout),
         ]
         return self.result("S10", "TUI slash suggestion", "slash registry check", workspace, [command], checks)
 
@@ -412,7 +406,7 @@ allowed-tools: read_file, write_file
             check("command_exit_0", command.returncode == 0),
             check("session_id_printed", "session id:" in stdout),
             check("runtime_mode_plan", "runtime mode: plan" in stdout),
-            check("worker_summary_printed", "worker summary:" in stdout),
+            check("git_status_printed", "git:" in stdout),
         ]
         return self.result("S11", "/session 展示 runtime 状态", "PTY REPL slash command", workspace, [command], checks)
 
@@ -543,40 +537,6 @@ allowed-tools: read_file, write_file
             check("outside_not_written", not (workspace / ".gencode" / "escape.md").exists()),
         ]
         return self.result("S18", "越界 plan path 被拒", "PTY REPL slash command", workspace, [command], checks)
-
-    def s19_plan_allows_explore(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s19")
-        (workspace / "README.md").write_text("# Payments\n\nExplore me.\n", encoding="utf-8")
-        prompt = (
-            "严格按步骤执行：先调用 agent 工具，description='Inspect README'，"
-            "prompt='Read README.md and summarize it.'，subagent_type='Explore'。然后 final。"
-        )
-        command = self.run_gencode("S19", workspace, repl_input=f"/plan payments\n{prompt}\n/exit\n", max_steps=4, max_new_tokens=1536, timeout=420)
-        report = self.evidence(workspace).report
-        workers = ((report.get("workers") or {}).get("items") or [])
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("worker_recorded", bool(workers), workers),
-            check("explore_worker", any(item.get("subagent_type") == "Explore" for item in workers), workers),
-            check("plan_mode_was_entered", self.evidence(workspace).has_session_event("runtime_mode_changed", mode="plan")),
-        ]
-        return self.result("S19", "plan mode 允许 Explore 子 agent", "PTY REPL / DeepSeek", workspace, [command], checks)
-
-    def s20_plan_rejects_worker_write(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s20")
-        command = self.run_gencode(
-            "S20",
-            workspace,
-            repl_input="/plan payments\n/subagent worker --scope src change code\n/exit\n",
-            timeout=120,
-        )
-        stdout = self.read_log(command.stdout_path)
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("worker_rejected", "plan mode only allows Explore agents" in stdout),
-            check("src_not_created", not (workspace / "src").exists()),
-        ]
-        return self.result("S20", "plan mode 禁止 worker 写入", "PTY REPL slash command", workspace, [command], checks)
 
     def s21_prior_read_required(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s21")
@@ -865,115 +825,15 @@ hello $ARGUMENTS from prompt only
         ]
         return self.result("S36", "invalid skill frontmatter 可诊断", "PTY REPL slash command", workspace, [command], checks)
 
-    def s37_explore_subagent(self) -> ScenarioResult:
+    def s37_goal_entrypoint(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s37")
-        (workspace / "README.md").write_text("# Demo\n\nSubagent target.\n", encoding="utf-8")
-        prompt = (
-            "严格按步骤执行，每次只返回一个 <tool> 或最后一个 <final>："
-            "1) agent description='Inspect README' prompt='Read README.md and summarize it in one sentence.' subagent_type='Explore'。"
-            "2) 等待 worker notification 后 final。"
-        )
-        command = self.run_gencode("S37", workspace, prompt=prompt, max_steps=5, max_new_tokens=1536, timeout=420)
-        report = self.latest_report(workspace) or {}
-        workers = ((report.get("workers") or {}).get("items") or [])
+        command = self.run_gencode("S37", workspace, repl_input="/goal list\n/exit\n", timeout=120)
+        stdout = self.read_log(command.stdout_path)
         checks = [
             check("command_exit_0", command.returncode == 0),
-            check("worker_recorded", bool(workers), workers),
-            check("worker_is_explore", any(item.get("subagent_type") == "Explore" for item in workers), workers),
+            check("goal_command_reaches_manager", "No saved Goal." in stdout),
         ]
-        checks.extend(self.events_have(workspace, "worker_started"))
-        return self.result("S37", "Explore 子 agent 只读探索", "one-shot CLI / DeepSeek", workspace, [command], checks)
-
-    def s38_worker_write_scope(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s38")
-        prompt = (
-            "严格调用 agent 工具：description='Write notes'，subagent_type='worker'，write_scope=['notes']，"
-            "prompt='write_file notes/first.txt content first\\n and final'。然后 final。"
-        )
-        command = self.run_gencode("S38", workspace, prompt=prompt, max_steps=4, max_new_tokens=1536, timeout=420)
-        report = self.evidence(workspace).report
-        workers = ((report.get("workers") or {}).get("items") or [])
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("worker_recorded", bool(workers), workers),
-            check("write_scope_notes", any(item.get("write_scope") == ["notes"] for item in workers), workers),
-        ]
-        return self.result("S38", "worker 只能写 scope 内", "one-shot CLI / DeepSeek", workspace, [command], checks)
-
-    def s39_worker_continuation(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s39")
-        prompt = (
-            "严格按步骤执行："
-            "1) agent description='Notes worker' subagent_type='worker' write_scope=['notes'] "
-            "prompt='write_file notes/first.txt content first\\n then final'。"
-            "2) send_message to='agent_1' message='write_file notes/second.txt content second\\n then final'。"
-            "3) final。"
-        )
-        command = self.run_gencode("S39", workspace, prompt=prompt, max_steps=6, max_new_tokens=1536, timeout=540)
-        report = self.evidence(workspace).report
-        workers = ((report.get("workers") or {}).get("items") or [])
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("same_worker_recorded", any(item.get("id") == "agent_1" for item in workers), workers),
-            check("send_message_attempted", "send_message" in self.evidence(workspace).tool_names()),
-        ]
-        return self.result("S39", "worker 续接同一个 child context", "one-shot CLI / DeepSeek", workspace, [command], checks)
-
-    def s40_running_worker_send_guard(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s40")
-        prompt = (
-            "严格按步骤执行："
-            "1) agent description='Slow worker' subagent_type='worker' write_scope=['notes'] "
-            "prompt='run_shell python -c \"import time; time.sleep(5); print(1)\" then final'。"
-            "2) 立刻 send_message to='agent_1' message='continue now'。3) final。"
-        )
-        command = self.run_gencode("S40", workspace, prompt=prompt, max_steps=5, max_new_tokens=1536, timeout=420)
-        trace_text, report_text = self.latest_trace_and_report_text(workspace)
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("send_guard_visible", "worker is running" in trace_text + report_text or "send_message" in self.evidence(workspace).tool_names()),
-        ]
-        return self.result("S40", "running worker 不能 send_message", "one-shot CLI / DeepSeek", workspace, [command], checks)
-
-    def s41_task_stop_worker(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s41")
-        prompt = (
-            "严格按步骤执行："
-            "1) agent description='Stop target' subagent_type='worker' write_scope=['notes'] "
-            "prompt='run_shell python -c \"import time; time.sleep(10)\" then final'。"
-            "2) task_stop task_id='agent_1'。3) final。"
-        )
-        command = self.run_gencode("S41", workspace, prompt=prompt, max_steps=5, max_new_tokens=1536, timeout=420)
-        report = self.evidence(workspace).report
-        workers = ((report.get("workers") or {}).get("items") or [])
-        checks = [
-            check("command_exit_0", command.returncode == 0),
-            check("task_stop_attempted", "task_stop" in self.evidence(workspace).tool_names()),
-            check("worker_status_recorded", bool(workers), workers),
-        ]
-        return self.result("S41", "task_stop 中止 worker", "one-shot CLI / DeepSeek", workspace, [command], checks)
-
-    def s42_clear_stops_worker(self) -> ScenarioResult:
-        workspace = self._fresh_workspace("s42")
-        first = self.run_gencode(
-            "S42-start",
-            workspace,
-            prompt=(
-                "严格调用 agent description='Background' subagent_type='worker' write_scope=['notes'] "
-                "prompt='run_shell python -c \"import time; time.sleep(10)\" then final'，然后 final。"
-            ),
-            max_steps=3,
-            max_new_tokens=1024,
-            timeout=240,
-        )
-        second = self.run_gencode("S42-clear", workspace, repl_input="/clear\n/agents\n/exit\n", extra=["--resume", "latest"], timeout=120)
-        stdout = self.read_log(second.stdout_path)
-        checks = [
-            check("start_exit_0", first.returncode == 0),
-            check("clear_exit_0", second.returncode == 0),
-            check("worker_summary_none_after_clear", "worker summary: none" in stdout),
-        ]
-        return self.result("S42", "/clear 停掉后台 worker", "one-shot + REPL clear", workspace, [first, second], checks)
+        return self.result("S37", "/goal 统一多 Agent 任务入口", "PTY REPL slash command", workspace, [command], checks)
 
     def s43_remember_candidate(self) -> ScenarioResult:
         workspace = self._fresh_workspace("s43")
@@ -1613,7 +1473,7 @@ def render_markdown(summary: dict) -> str:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run GenCode human-scenario release gate.")
-    parser.add_argument("--suite", choices=("gate", "full"), default="gate", help="Run the 12-scenario release gate or all 50 designed scenarios.")
+    parser.add_argument("--suite", choices=("gate", "full"), default="gate", help="Run the 12-scenario release gate or all 43 designed scenarios.")
     parser.add_argument("--output-dir", default="", help="Output directory for logs, workspaces, and summary. Must be outside this git repo.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="GenCode config file. Defaults to this repo's ignored .gencode.toml.")
     parser.add_argument("--provider", default="deepseek", help="Provider profile to pass to GenCode.")

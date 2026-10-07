@@ -1,8 +1,7 @@
 """TaskState snapshot for one ask() run.
 
-TaskState tracks where a user request is in the runtime, how much work it has
-done, what evidence was collected, and why it stopped. It is persisted during
-the run for live inspection and post-run review.
+TaskState tracks runtime progress, collected evidence, and why a user request stopped.
+It is persisted during the run for live inspection and post-run review.
 """
 
 from dataclasses import dataclass, field
@@ -23,6 +22,7 @@ STOP_REASON_APPROVAL_DENIED = "approval_denied"
 STOP_REASON_PERSISTENCE_ERROR = "persistence_error"
 STOP_REASON_RESUME_LOAD_ERROR = "resume_load_error"
 STOP_REASON_FINAL_GATE_BLOCKED = "final_gate_blocked"
+STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED = "goal_token_budget_exhausted"
 
 
 @dataclass

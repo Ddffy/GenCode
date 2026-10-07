@@ -24,7 +24,6 @@ def native_prompt_contract(agent, native_tools, legacy_tool_lines):
             '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>\n'
             '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>\n'
             '<tool>{"name":"run_shell","args":{"command":"uv run --with pytest python -m pytest -q","timeout":20}}</tool>\n'
-            '<tool>{"name":"agent","args":{"description":"Inspect auth","prompt":"Find auth entry points","subagent_type":"Explore"}}</tool>\n'
             "<final>Done.</final>"
         ),
         "- Final answers must look like: <final>your answer</final>.",

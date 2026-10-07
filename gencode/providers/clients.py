@@ -447,6 +447,9 @@ def _extract_usage_cache_details(data):
     )
     return {
         "input_tokens": input_tokens,
+        "total_input_tokens": int(
+            usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+        ),
         "output_tokens": output_tokens,
         "total_tokens": usage.get("total_tokens"),
         "cached_tokens": cached_tokens,
@@ -1126,6 +1129,17 @@ class AnthropicCompatibleModelClient:
             "input_tokens": usage.get("input_tokens"),
             "output_tokens": usage.get("output_tokens"),
             "cached_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+            "cache_creation_input_tokens": int(
+                usage.get("cache_creation_input_tokens", 0) or 0
+            ),
+            "total_input_tokens": sum(
+                int(usage.get(key, 0) or 0)
+                for key in (
+                    "input_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                )
+            ),
             "cache_hit": int(usage.get("cache_read_input_tokens", 0) or 0) > 0,
             "native_tool_calling": bool(tools),
             "native_tool_call_count": len(calls),
@@ -1257,6 +1271,14 @@ class AnthropicCompatibleModelClient:
             "native_message_count": len(input_messages),
             **request_metadata,
             **_extract_usage_cache_details(data),
+            "total_input_tokens": sum(
+                int((data.get("usage") or {}).get(key, 0) or 0)
+                for key in (
+                    "input_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                )
+            ),
         }
         if text or tool_calls:
             if _return_result:

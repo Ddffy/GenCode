@@ -16,6 +16,13 @@ def build_agent(tmp_path, outputs):
     )
 
 
+def test_shell_env_preserves_windows_user_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    agent = build_agent(tmp_path, [])
+
+    assert agent.shell_env()["USERPROFILE"] == str(tmp_path)
+
+
 def read_jsonl(path):
     return [
         json.loads(line)

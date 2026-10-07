@@ -27,6 +27,7 @@ from .context_manager import ContextManager
 from .context_orchestrator import ContextOrchestrator
 from .engine import Engine
 from .git_integration import GitIntegration
+from .goal_manager import GoalManager
 from .model_router import ModelClientRouter
 from .native_messages import native_prompt_contract
 from .permissions import PermissionChecker
@@ -46,7 +47,6 @@ from .todo_ledger import TodoLedger
 from .tool_profiles import build_tool_profiles
 from .tool_repetition import tool_call_repetition_reason
 from .turn_history import TurnHistoryBuilder
-from .worker_manager import WorkerManager
 from .workspace import MAX_HISTORY, WorkspaceContext, clip, now
 
 DEFAULT_SHELL_ENV_ALLOWLIST = (
@@ -62,6 +62,7 @@ DEFAULT_SHELL_ENV_ALLOWLIST = (
     "TMPDIR",
     "TMP",
     "TEMP",
+    "USERPROFILE",
     "USER",
 )
 DEFAULT_FEATURE_FLAGS = {
@@ -121,6 +122,7 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
         before_final_hooks=None,
         git_auto_commit=True,
         git_auto_undo=True,
+        stable_workspace_prefix=False,
     ):
         self.model_client = model_client
         self.model_client_factory = model_client_factory
@@ -190,6 +192,7 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
         self.before_final_hooks = tuple(before_final_hooks or ())
         self.git_auto_commit = bool(git_auto_commit)
         self.git_auto_undo = bool(git_auto_undo)
+        self.stable_workspace_prefix = bool(stable_workspace_prefix)
         self.run_store = run_store or RunStore(
             Path(workspace.repo_root) / ".gencode" / "runs"
         )
@@ -226,7 +229,7 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
         self.session["memory"] = self.memory.to_dict()
         self.self_authored_file_freshness = {}
         self.todo_ledger = TodoLedger(self)
-        self.worker_manager = WorkerManager(self)
+        self.goal_manager = GoalManager(self)
         self.skills = skillslib.discover_skills(self.root)
         self.tools = self._apply_tool_allowlist(self.build_tools())
         self.tool_profiles = build_tool_profiles(self.tools)
@@ -536,9 +539,8 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
             - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
             - New files should be complete and runnable, including obvious imports.
             - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
-            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or agent with args={{}}. Git changes auto-commit when available; /undo reverts the latest safe change.
-            - Use agent for bounded subagents. Explore is read-only; worker writes must stay inside write_scope.
-            - Use send_message to continue an existing worker instead of spawning a fresh worker with missing context.
+            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, or run_shell with args={{}}. Git changes auto-commit when available; /undo reverts the latest safe change.
+            - Use /goal for multi-step work that needs planning, isolated Workers, retries, integration, and verification.
             - {skillslib.SKILL_FILE_CREATION_GUIDE}
 
             {self.runtime_mode_text()}
@@ -549,7 +551,7 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
             Valid response examples:
             {examples}
 
-            {self.workspace.text()}
+            {self.workspace.text(cache_stable=self.stable_workspace_prefix)}
             """
         ).strip()
         return PromptPrefix(
@@ -835,7 +837,12 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
         return bool(self.repeated_tool_call_reason(name, args))
 
     def repeated_tool_call_reason(self, name, args):
-        return tool_call_repetition_reason(self.session["history"], name, args)
+        return tool_call_repetition_reason(
+            self.session["history"],
+            name,
+            args,
+            max_search_calls=16 if getattr(self, "goal_worker", False) else None,
+        )
 
     @staticmethod
     def new_task_id():
@@ -878,7 +885,6 @@ class GenCode(RuntimeAsyncMixin, RuntimeSecretsMixin, RuntimeCheckpointsMixin, R
             "todos": self.todo_ledger.to_dict(),
             "todo_changes": list(task_state.todo_changes),
             "evidence_summaries": dict(task_state.evidence_summaries),
-            "workers": self.worker_manager.to_dict(),
             "git": self.git.report(),
         }
 

@@ -10,13 +10,113 @@ import time
 
 from ..providers.base import complete_model_async, stream_model
 from ..providers.errors import ProviderError
+from .completion_governance import finish_stopped_run
+from .context_usage import estimate_tokens
+from .engine_read_only_qa import READ_ONLY_QA_FINAL_MAX_NEW_TOKENS
 from .native_messages import build_native_messages
 from .parallel_tools import (
     can_parallelize_tool_batch,
     execute_parallel_safe_tools,
 )
+from .task_state import STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED
 from .tool_execution import finalize_tool_call
 from .workspace import clip, now
+
+
+class GoalTokenCallBudget:
+    def __init__(self, engine, agent, task_state, run_started_at):
+        self.engine = engine
+        self.agent = agent
+        self.task_state = task_state
+        self.run_started_at = run_started_at
+        self.budget = getattr(agent, "goal_token_budget", None)
+        self.reservation = None
+
+    @property
+    def enabled(self):
+        return self.budget is not None
+
+    async def reserve(self, user_message, prompt, prompt_metadata, qa_final_only):
+        max_output_tokens = (
+            min(self.agent.max_new_tokens, READ_ONLY_QA_FINAL_MAX_NEW_TOKENS)
+            if qa_final_only
+            else self.agent.max_new_tokens
+        )
+        if self.budget is None:
+            return max_output_tokens, []
+        context_usage = dict(prompt_metadata.get("context_usage", {}) or {})
+        estimated_input_tokens = max(
+            int(context_usage.get("total_estimated_tokens", 0) or 0),
+            estimate_tokens(len(prompt)),
+        )
+        role = str(getattr(self.agent, "goal_role", "unknown") or "unknown")
+        self.reservation = await self.budget.reserve(
+            estimated_input_tokens, max_output_tokens, role
+        )
+        if self.reservation is not None:
+            return max_output_tokens, []
+        usage = self.budget.snapshot()
+        self.task_state.evidence_summaries["goal_token_usage"] = usage
+        final = (
+            "Goal token budget exhausted before the next model call "
+            f"({usage['total_tokens']}/{usage['max_total_tokens']} tokens; role={role})."
+        )
+        events = list(
+            finish_stopped_run(
+                self.engine,
+                self.task_state,
+                user_message,
+                final,
+                STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED,
+                self.run_started_at,
+            )
+        )
+        return max_output_tokens, events
+
+    async def record(self, result):
+        metadata = dict(
+            result.metadata
+            or getattr(self.agent.model_client, "last_completion_metadata", {})
+            or {}
+        )
+        if self.budget is not None and self.reservation is not None:
+            usage = await self.budget.record(
+                self.reservation,
+                getattr(self.agent, "goal_role", "unknown"),
+                metadata,
+                result.text,
+            )
+            self.task_state.evidence_summaries["goal_token_usage"] = usage
+        self.reservation = None
+        return metadata
+
+    async def release(self):
+        if self.budget is not None and self.reservation is not None:
+            await self.budget.release(self.reservation)
+            self.reservation = None
+
+    def stop_before_tool(self, user_message):
+        if self.budget is None or not self.budget.blocked:
+            return []
+        usage = self.budget.snapshot()
+        self.task_state.evidence_summaries["goal_token_usage"] = usage
+        role = str(usage.get("budget_exhausted_role", "") or "")
+        role_text = f"; role={role}" if role else ""
+        final = (
+            "Goal token budget exhausted after this model call; "
+            "the returned tool request was not executed. "
+            f"({usage['total_tokens']}/{usage['max_total_tokens']} tokens{role_text})."
+        )
+        return list(
+            finish_stopped_run(
+                self.engine,
+                self.task_state,
+                user_message,
+                final,
+                STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED,
+                self.run_started_at,
+            )
+        )
 
 
 def _set_fast_read_only_qa(agent, enabled):
@@ -241,12 +341,6 @@ def _finish_tool_payload(
     if tool_metadata.get("media_refs"):
         history_item["media_refs"] = list(tool_metadata.get("media_refs", []) or [])
     agent.record(history_item)
-    for notification in engine.drain_worker_notifications():
-        yield {
-            "type": "worker_notification",
-            "run_id": getattr(agent, "current_run_id", ""),
-            "content": notification,
-        }
     agent.run_store.write_task_state(task_state)
     agent.emit_trace(
         task_state,

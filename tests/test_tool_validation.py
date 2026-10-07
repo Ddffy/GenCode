@@ -300,67 +300,6 @@ class TestTodoValidation:
 
 
 # ---------------------------------------------------------------------------
-# agent / send_message / task_stop
-# ---------------------------------------------------------------------------
-
-class TestAgentToolValidation:
-    def test_agent_valid(self, tmp_path):
-        agent = build_agent(tmp_path)
-        agent.validate_tool("agent", {
-            "description": "Explore auth",
-            "prompt": "Find entry points",
-            "subagent_type": "Explore",
-        })
-
-    def test_agent_empty_description_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="description"):
-            agent.validate_tool("agent", {"description": "", "prompt": "do it"})
-
-    def test_agent_empty_prompt_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="prompt"):
-            agent.validate_tool("agent", {"description": "x", "prompt": ""})
-
-    def test_agent_invalid_subagent_type_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="subagent_type"):
-            agent.validate_tool("agent", {
-                "description": "x", "prompt": "y", "subagent_type": "invalid"
-            })
-
-    def test_agent_invalid_write_scope_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="write_scope"):
-            agent.validate_tool("agent", {
-                "description": "x", "prompt": "y", "write_scope": 42
-            })
-
-    def test_send_message_valid(self, tmp_path):
-        agent = build_agent(tmp_path)
-        agent.validate_tool("send_message", {"to": "worker_1", "message": "continue"})
-
-    def test_send_message_empty_to_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="to"):
-            agent.validate_tool("send_message", {"to": "", "message": "hi"})
-
-    def test_send_message_empty_message_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="message"):
-            agent.validate_tool("send_message", {"to": "w1", "message": ""})
-
-    def test_task_stop_valid(self, tmp_path):
-        agent = build_agent(tmp_path)
-        agent.validate_tool("task_stop", {"task_id": "task_abc"})
-
-    def test_task_stop_empty_id_raises(self, tmp_path):
-        agent = build_agent(tmp_path)
-        with pytest.raises(ValueError, match="task_id"):
-            agent.validate_tool("task_stop", {"task_id": ""})
-
-
-# ---------------------------------------------------------------------------
 # plan mode tools
 # ---------------------------------------------------------------------------
 

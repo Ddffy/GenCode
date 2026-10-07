@@ -8,7 +8,7 @@ live in validate_tool() since they require access to the agent.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -209,71 +209,6 @@ class TodoUpdateArgs(BaseModel):
 
 class TodoListArgs(BaseModel):
     pass
-
-
-class AgentArgs(BaseModel):
-    description: str
-    prompt: str
-    subagent_type: str = "worker"
-    write_scope: Union[List[str], str, None] = None
-
-    @field_validator("description")
-    @classmethod
-    def description_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("description must not be empty")
-        return v
-
-    @field_validator("prompt")
-    @classmethod
-    def prompt_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("prompt must not be empty")
-        return v
-
-    @field_validator("subagent_type")
-    @classmethod
-    def valid_subagent_type(cls, v: str) -> str:
-        if v not in {"worker", "Explore"}:
-            raise ValueError("subagent_type must be worker or Explore")
-        return v
-
-    @field_validator("write_scope", mode="before")
-    @classmethod
-    def valid_write_scope(cls, v: object) -> object:
-        if v is not None and not isinstance(v, (list, str)):
-            raise ValueError("write_scope must be a list of workspace paths")
-        return v
-
-
-class SendMessageArgs(BaseModel):
-    to: str
-    message: str
-
-    @field_validator("to")
-    @classmethod
-    def to_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("to must not be empty")
-        return v
-
-    @field_validator("message")
-    @classmethod
-    def message_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("message must not be empty")
-        return v
-
-
-class TaskStopArgs(BaseModel):
-    task_id: str
-
-    @field_validator("task_id")
-    @classmethod
-    def task_id_not_empty(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("task_id must not be empty")
-        return v
 
 
 class EnterPlanModeArgs(BaseModel):

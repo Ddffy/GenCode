@@ -7,9 +7,6 @@ from dataclasses import dataclass, field
 
 PROTECTED_TOOL_NAMES = {
     "ask_user",
-    "agent",
-    "send_message",
-    "task_stop",
     "todo_add",
     "todo_update",
     "todo_list",

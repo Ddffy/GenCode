@@ -2,10 +2,12 @@
 
 import json
 import os
+import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .atomic_file import replace_with_retry
 from .workspace import clip
 
 
@@ -25,11 +27,16 @@ class SessionStore:
         path = self.path(session["id"])
         payload = json.dumps(session, indent=2)
         with self._lock:
-            tmp_path = path.with_name(
-                f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
             )
-            tmp_path.write_text(payload, encoding="utf-8")
-            os.replace(tmp_path, path)
+            tmp_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:
+                    temporary.write(payload)
+                replace_with_retry(tmp_path, path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
         return path
 
     def load(self, session_id):
@@ -61,8 +68,8 @@ class SessionStore:
                     "id": str(session.get("id", path.stem)),
                     "created_at": str(session.get("created_at", "")),
                     "updated_at": datetime.fromtimestamp(
-                        path.stat().st_mtime
-                    ).isoformat(timespec="seconds"),
+                        path.stat().st_mtime, tz=timezone.utc
+                    ).astimezone().isoformat(timespec="seconds"),
                     "history_count": len(history),
                     "runtime_mode": str(
                         session.get("runtime_mode", {}).get("mode", "default")

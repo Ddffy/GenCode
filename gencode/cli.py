@@ -15,7 +15,7 @@ import textwrap
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .commands.slash import command_help_text, parse_subagent_args, resolve_command
+from .commands.slash import command_help_text, resolve_command
 from .config import (
     DEFAULT_PROVIDER,
     PROVIDER_DEFAULTS,
@@ -490,6 +490,8 @@ def handle_repl_command(agent, user_input):
 
     if user_input in {"/exit", "/quit"}:
         return True, True, ""
+    if command_name == "goal":
+        return True, False, "Use the asynchronous REPL to run /goal."
     if user_input == "/help":
         return True, False, HELP_DETAILS
     if user_input == "/memory":
@@ -564,13 +566,6 @@ def handle_repl_command(agent, user_input):
         return True, False, _format_mode_status(agent)
     if user_input == "/session":
         return True, False, _format_session_status(agent)
-    if command_name == "agents":
-        return True, False, _format_subagent_status(agent)
-    if command_name == "subagent":
-        payload, error = parse_subagent_args(command_args)
-        if error:
-            return True, False, error
-        return True, False, asyncio.run(agent.run_tool("agent", payload))
     if user_input == "/context":
         return (
             True,
@@ -610,6 +605,8 @@ def handle_repl_command(agent, user_input):
     command, arguments = skillslib.parse_slash_command(user_input)
     if command and command in agent.skills:
         return True, False, invoke_skill(agent, command, arguments)
+    if str(user_input).startswith("/"):
+        return True, False, f"Unknown command. Use /help.\n\n{HELP_DETAILS}"
     return False, False, ""
 
 
@@ -623,11 +620,11 @@ async def handle_repl_command_async(agent, user_input):
         resolved = resolve_command(raw_command)
         command_name = resolved.name if resolved else raw_command.strip().lower()
         command_args = command_args.strip()
-    if command_name == "subagent":
-        payload, error = parse_subagent_args(command_args)
-        if error:
-            return True, False, error
-        return True, False, await agent.run_tool("agent", payload)
+    if command_name == "goal":
+        try:
+            return True, False, await agent.goal_manager.command(command_args)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return True, False, f"error: {exc}"
     if user_input.startswith("/resume "):
         _, _, target = user_input.partition(" ")
         session_id = _resolve_session_id(agent, target.strip())
@@ -656,17 +653,6 @@ def _format_session_status(agent):
     task_state = getattr(agent, "current_task_state", None)
     run_id = getattr(task_state, "run_id", "") or ""
     run_dir = str(agent.run_store.run_dir(run_id)) if run_id else "-"
-    workers = agent.worker_manager.to_dict()
-    items = workers.get("items", [])
-    worker_summary = "none"
-    if items:
-        counts = {}
-        for item in items:
-            status = str(item.get("status", "unknown") or "unknown")
-            counts[status] = counts.get(status, 0) + 1
-        worker_summary = ", ".join(
-            f"{status}={count}" for status, count in sorted(counts.items())
-        )
     git = getattr(agent, "git", None)
     if git is not None and git.enabled:
         git_summary = f"enabled ({git.head()[:12] or 'unborn'}, {git.status_text()})"
@@ -682,26 +668,9 @@ def _format_session_status(agent):
             f"last run id: {run_id or '-'}",
             f"last run dir: {run_dir}",
             f"resume status: {agent.resume_state.get('status', '-')}",
-            f"worker summary: {worker_summary}",
             f"git: {git_summary}",
         ]
     )
-
-#格式化当前子代理信息
-def _format_subagent_status(agent):
-    return "\n".join(
-        [
-            "subagent tools: agent(description, prompt, subagent_type='Explore|worker', write_scope=[]), send_message(to, message), task_stop(task_id)",
-            f"worker summary: {_worker_summary(agent)}",
-        ]
-    )
-
-#格式化当前工作线程信息
-def _worker_summary(agent):
-    items = agent.worker_manager.to_dict().get("items", [])
-    if not items:
-        return "none"
-    return ", ".join(f"{item.get('id')}:{item.get('status')}" for item in items)
 
 #上下文压缩，支持三种选择，默认deterministic，还有llm压缩，根据上下文压力，大才自动选择llm
 def _handle_compact(agent, args_text):
@@ -883,13 +852,6 @@ def _cli_ask_user(question, choices):
     return input(question + " ").strip()
 
 
-def _drain_idle_worker_notifications(agent):
-    notifications = agent.engine.drain_worker_notifications()
-    for notification in notifications:
-        print(f"\n[worker notification]\n{notification}")
-    return notifications
-
-
 def interaction_mode(args):
     if args.prompt or getattr(args, "prompt_file", None):
         return "one_shot"
@@ -1009,10 +971,6 @@ async def _consume_cli_turn(agent, prompt, run_id=None, after_seq=0):
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
                     rendered_text.append(chunk)
-                elif event_type == "worker_event":
-                    nested = event.get("event") if isinstance(event.get("event"), dict) else {}
-                    if nested.get("type") == "text_delta":
-                        print(f"\n[{event.get('source', 'worker')}] {nested.get('content', '')}")
                 elif event_type in {"final", "stop"}:
                     final_text = str(event.get("content", ""))
                     streamed_text = "".join(rendered_text)
@@ -1066,7 +1024,6 @@ async def _run_repl(agent):
                 except Exception as exc:  # noqa: BLE001
                     print(f"[Error] {exc}", file=sys.stderr)
                 active_turn = None
-                _drain_idle_worker_notifications(agent)
             if input_task in done:
                 user_input = input_task.result()
                 if user_input is None:

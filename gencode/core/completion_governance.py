@@ -73,7 +73,7 @@ def finish_successful_run(engine, task_state, user_message, final, run_started_a
         {"run_id": task_state.run_id, "kind": "final", "content": clip(final, 500)},
     )
     task_state.finish_success(final)
-    worker_events = _emit_terminal_artifacts(
+    _emit_terminal_artifacts(
         engine,
         task_state,
         user_message,
@@ -81,7 +81,6 @@ def finish_successful_run(engine, task_state, user_message, final, run_started_a
         run_started_at,
         checkpoint_trigger="run_finished",
     )
-    yield from worker_events
     yield {"type": "final", "run_id": task_state.run_id, "content": final}
     yield _turn_finished_event(task_state)
 
@@ -106,7 +105,6 @@ def finish_stopped_run(
         run_started_at,
         checkpoint_trigger=stop_reason,
         maintain_memory=False,
-        drain_workers=False,
     )
     yield {"type": "stop", "run_id": task_state.run_id, "content": final}
     yield _turn_finished_event(task_state)
@@ -141,7 +139,6 @@ def _emit_terminal_artifacts(
     *,
     checkpoint_trigger,
     maintain_memory=True,
-    drain_workers=True,
 ):
     agent = engine.runtime
     emit_terminal_transition(
@@ -175,20 +172,8 @@ def _emit_terminal_artifacts(
     agent.run_store.write_report(
         task_state, agent.redact_artifact(agent.build_report(task_state))
     )
-    if drain_workers:
-        worker_events = [
-            {
-                "type": "worker_notification",
-                "run_id": getattr(agent, "current_run_id", ""),
-                "content": notification,
-            }
-            for notification in engine.drain_worker_notifications()
-        ]
-    else:
-        worker_events = []
     agent.current_turn_id = ""
     agent.current_run_id = ""
-    return worker_events
 
 
 def maintain_memory_safely(agent, task_state, final_answer):

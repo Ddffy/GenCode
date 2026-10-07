@@ -10,6 +10,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from .atomic_file import replace_with_retry
+
 
 def _run_id(value):
     if hasattr(value, "run_id"):
@@ -112,5 +114,8 @@ class RunStore:
         ) as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
-            temp_name = handle.name
-        Path(temp_name).replace(path)
+            temp_path = Path(handle.name)
+        try:
+            replace_with_retry(temp_path, path)
+        finally:
+            temp_path.unlink(missing_ok=True)

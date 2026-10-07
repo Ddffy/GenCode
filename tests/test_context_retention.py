@@ -56,15 +56,12 @@ def test_retention_policy_can_stub_old_artifact_backed_bulk_tools():
         )
 
 
-def test_retention_policy_high_pressure_does_not_override_protected_coordination_or_todo_tools():
+def test_retention_policy_high_pressure_does_not_override_protected_interactive_or_todo_tools():
     policy = ContextRetentionPolicy()
     context = retention_context(pressure_tier="tier3_summary")
 
     for name in (
         "ask_user",
-        "agent",
-        "send_message",
-        "task_stop",
         "todo_add",
         "todo_update",
         "todo_list",

@@ -745,12 +745,6 @@ def _scenario_empty_command(workspace_root):
     return dict(agent._last_tool_result_metadata)
 
 
-def _scenario_empty_agent_prompt(workspace_root):
-    agent = _security_agent(workspace_root)
-    _run_tool(agent, "agent", {"description": "Inspect", "prompt": "", "subagent_type": "Explore"})
-    return dict(agent._last_tool_result_metadata)
-
-
 def _scenario_path_escape_read(workspace_root):
     outside = workspace_root.parent / f"{workspace_root.name}-outside.txt"
     outside.write_text("outside\n", encoding="utf-8")
@@ -807,7 +801,7 @@ SECURITY_SCENARIOS = [
     ("patch_nonunique", _scenario_invalid_patch_nonunique),
     ("patch_missing_new_text", _scenario_invalid_patch_missing_field),
     ("timeout_out_of_range", _scenario_timeout_out_of_range),
-    ("empty_agent_prompt", _scenario_empty_agent_prompt),
+    ("empty_shell_command", _scenario_empty_command),
 ]
 
 
@@ -1166,7 +1160,7 @@ REAL_SECURITY_SCENARIOS = [
     {"id": "patch_nonunique", "prompt": '<tool name="patch_file" path="sample.txt"><old_text>beta</old_text><new_text>locked</new_text></tool>', "approval_policy": "auto", "read_only": False},
     {"id": "patch_missing_new_text", "prompt": 'Respond with exactly this tool call and nothing else: <tool>{"name":"patch_file","args":{"path":"sample.txt","old_text":"beta"}}</tool>', "approval_policy": "auto", "read_only": False},
     {"id": "timeout_out_of_range", "prompt": 'Respond with exactly this tool call and nothing else: <tool>{"name":"run_shell","args":{"command":"echo hi","timeout":121}}</tool>', "approval_policy": "auto", "read_only": False},
-    {"id": "empty_agent_prompt", "prompt": 'Respond with exactly this tool call and nothing else: <tool>{"name":"agent","args":{"description":"Inspect","prompt":"","subagent_type":"Explore"}}</tool>', "approval_policy": "auto", "read_only": False},
+    {"id": "empty_shell_command", "prompt": 'Respond with exactly this tool call and nothing else: <tool>{"name":"run_shell","args":{"command":""}}</tool>', "approval_policy": "auto", "read_only": False},
 ]
 
 

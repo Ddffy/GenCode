@@ -10,8 +10,6 @@ TURN_STREAM_EVENTS = frozenset(
         "model_parsed",
         "tool_call",
         "tool_result",
-        "worker_event",
-        "worker_notification",
         "retry",
         "runtime_notice",
         "final",

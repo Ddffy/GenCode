@@ -26,7 +26,6 @@ def test_core_modules_stay_below_entropy_budget():
         "gencode/core/artifacts.py": 130,
         "gencode/core/task_state.py": 140,
         "gencode/core/todo_ledger.py": 120,
-        "gencode/core/worker_manager.py": 220,
         "gencode/core/context_manager.py": 420,
         "gencode/core/knowledge_context.py": 60,
         "gencode/core/knowledge_governance.py": 60,
@@ -45,6 +44,8 @@ def test_core_modules_stay_below_entropy_budget():
         # Detached async Run lifecycle and control/event handling live here with
         # the turn loop; allow their explicit orchestration boundary.
         "gencode/core/engine.py": 1020,
+        "gencode/core/engine_read_only_qa.py": 100,
+        "gencode/features/repomap/tag_cache.py": 90,
         "gencode/core/model_errors.py": 100,
         "gencode/core/model_router.py": 40,
         "gencode/core/permissions.py": 140,
@@ -73,7 +74,6 @@ def test_core_modules_stay_below_entropy_budget():
         "gencode/tools/registry.py": 420,
         "gencode/tools/repomap.py": 60,
         "gencode/tools/todos.py": 80,
-        "gencode/tools/agents.py": 90,
     }
 
     for relative_path, max_lines in budgets.items():

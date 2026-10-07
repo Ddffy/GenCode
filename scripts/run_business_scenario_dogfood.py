@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -151,7 +152,7 @@ def _scenario_order_pricing_bugfix(output_dir, workspace, client_factory, max_st
         "2) read_file src/order_pricing.py start=1 end=40。"
         "3) patch_file src/order_pricing.py，把 `return round(subtotal + discount + tax, 2)` "
         "替换为 `return round(subtotal - discount + tax, 2)`。"
-        "4) run_shell `uv run --with pytest python -m pytest -q`。"
+        "4) run_shell `python -m pytest -q`。"
         "5) 测试 passed 后 final。不要改其他文件，不要编造文件内容。"
     )
     return _finalize(
@@ -256,7 +257,7 @@ def _scenario_incident_resume_fix(output_dir, workspace, client_factory, max_ste
         "继续刚才的事故修复。请严格按下面步骤执行，每次只返回一个 <tool> 或最后一个 <final>："
         "1) patch_file src/incident_router.py，把 `return 'ok' if ms < 1000 else 'page'` "
         "替换为 `return 'ok' if ms < 500 else 'degraded' if ms < 1000 else 'page'`。"
-        "2) run_shell `uv run --with pytest python -m pytest -q`。"
+        "2) run_shell `python -m pytest -q`。"
         "3) todo_update todo_id='todo_1' status='done' note='threshold fixed and tests verified'。"
         "4) 测试 passed 后 final。不要改其他文件。"
     )
@@ -372,8 +373,13 @@ def _history_contains(agent, tool_name, text):
 
 
 def _run_pytest(workspace):
+    command = (
+        ["uv", "run", "--with", "pytest", "python", "-m", "pytest", "-q"]
+        if shutil.which("uv")
+        else [sys.executable, "-m", "pytest", "-q"]
+    )
     return subprocess.run(
-        ["uv", "run", "--with", "pytest", "python", "-m", "pytest", "-q"],
+        command,
         cwd=workspace,
         text=True,
         stdout=subprocess.PIPE,

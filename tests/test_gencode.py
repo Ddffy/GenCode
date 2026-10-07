@@ -1890,7 +1890,6 @@ def test_reviewer_skeleton_docs_exist():
     assert "Harness boundaries" in review_text
 
     testing_text = testing.read_text(encoding="utf-8")
-    assert "50 human scenarios" in testing_text
     assert "scripts/run_v3_human_scenario_gate.py" in testing_text
 
 

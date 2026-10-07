@@ -42,9 +42,9 @@ def test_todo_tools_persist_state_and_emit_session_events(tmp_path):
     assert todo_events[-1]["todo"]["note"] == "started"
 
 
-def test_todo_tools_are_available_in_plan_mode_and_prompt_context(tmp_path):
+def test_todo_tools_are_available_for_goal_mode_and_prompt_context(tmp_path):
     agent = build_agent(tmp_path, ["<final>Plan ready.</final>"])
-    agent.enter_plan_mode("subagent")
+    agent.enter_plan_mode("goal")
 
     assert "todo_add" in agent.available_tools()
     assert "todo_update" in agent.available_tools()

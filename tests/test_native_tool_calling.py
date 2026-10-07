@@ -245,8 +245,6 @@ def test_engine_executes_native_call_and_accepts_plain_final_text(tmp_path):
 
 
 def test_native_final_without_tools_is_accepted_as_plain_text(tmp_path, monkeypatch):
-    from gencode.core import engine as engine_module
-
     (tmp_path / "README.md").write_text("native path\n", encoding="utf-8")
 
     class FakeNativeClient:
@@ -282,7 +280,9 @@ def test_native_final_without_tools_is_accepted_as_plain_text(tmp_path, monkeypa
                 )
             yield ModelStreamEvent("completed", result=result)
 
-    monkeypatch.setattr(engine_module, "READ_ONLY_QA_EVIDENCE_STEP_BUDGET", 1)
+    monkeypatch.setattr(
+        "gencode.core.engine_read_only_qa.READ_ONLY_QA_EVIDENCE_STEP_BUDGET", 1
+    )
     client = FakeNativeClient()
     agent = GenCode(
         model_client=client,

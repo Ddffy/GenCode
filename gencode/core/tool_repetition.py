@@ -14,13 +14,17 @@ def is_repeated_tool_call(history, name, args):
     return bool(tool_call_repetition_reason(history, name, args))
 
 
-def tool_call_repetition_reason(history, name, args):
+def tool_call_repetition_reason(history, name, args, *, max_search_calls=None):
     current_turn = _current_turn_history(history)
     tool_events = [
         (index, item)
         for index, item in enumerate(current_turn)
         if item.get("role") == "tool"
     ]
+    if name == "search" and max_search_calls is not None:
+        search_calls = sum(item.get("name") == "search" for _, item in tool_events)
+        if search_calls >= int(max_search_calls):
+            return "search_turn_budget_exhausted"
     if name in MEDIA_INSPECTION_TOOLS and _media_path_inspection_count(tool_events, args) >= MAX_MEDIA_INSPECTIONS_PER_PATH:
         return "repeated_identical_call"
     if name == "read_file":

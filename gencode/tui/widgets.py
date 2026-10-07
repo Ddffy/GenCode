@@ -29,12 +29,6 @@ def format_tool_args(name: str, args: dict | None) -> str:
         return path
     if name == "search":
         return f"{args.get('pattern', '')} in {args.get('path', '.')}"
-    if name == "agent":
-        return str(args.get("task", args.get("description", "")))
-    if name == "send_message":
-        return str(args.get("to", ""))
-    if name == "task_stop":
-        return str(args.get("task_id", ""))
     return json.dumps(args, ensure_ascii=False, sort_keys=True)
 
 

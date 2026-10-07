@@ -32,6 +32,12 @@ def test_repository_explanation_gets_a_smaller_tool_budget():
     ) is False
 
 
+def test_goal_worker_tool_budget_ignores_read_only_qa_heuristic():
+    prompt = "Goal Worker requested command describes an implementation task"
+    assert _turn_tool_step_budget(prompt, 48) == 28
+    assert _turn_tool_step_budget(prompt, 48, allow_read_only_qa=False) == 48
+
+
 def test_read_only_qa_prompt_requests_evidence_without_progress_narration():
     prompt = _read_only_qa_prompt("介绍 GenCode 多 Agent")
 

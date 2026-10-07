@@ -1,6 +1,7 @@
 import asyncio
 import json
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 from conftest import collect_events, run_tool
@@ -43,6 +44,10 @@ class FakeResponse:
 class RecordingVisionClient(ScriptedModelClient):
     def __init__(self, outputs):
         super().__init__(outputs)
+
+
+def _record_provider_client(kind, **kwargs):
+    return SimpleNamespace(kind=kind, kwargs=kwargs)
 
 
 def build_agent(tmp_path, model_client=None, model_client_router=None):
@@ -182,17 +187,28 @@ def test_build_agent_uses_separate_vision_provider_for_deepseek(tmp_path, monkey
     monkeypatch.setenv("OPENAI_API_BASE", "https://vision.example/v1")
 
     with pytest.MonkeyPatch.context() as patcher:
-        patcher.setattr(gencode_cli, "AnthropicCompatibleModelClient", lambda **kwargs: ("anthropic", kwargs))
-        patcher.setattr(gencode_cli, "OpenAICompatibleModelClient", lambda **kwargs: ("openai", kwargs))
+        patcher.setattr(
+            gencode_cli,
+            "AnthropicCompatibleModelClient",
+            lambda **kwargs: _record_provider_client("anthropic", **kwargs),
+        )
+        patcher.setattr(
+            gencode_cli,
+            "OpenAICompatibleModelClient",
+            lambda **kwargs: _record_provider_client("openai", **kwargs),
+        )
         agent = gencode_cli.build_agent(args)
         vision_client = agent.model_client_router.vision_client()
 
-    assert agent.model_client[0] == "anthropic"
-    assert agent.model_client[1]["model"] == "deepseek-v4-flash"
+    assert agent.model_client.kind == "anthropic"
+    assert agent.model_client.provider == "deepseek"
+    assert agent.model_client.protocol == "anthropic"
+    assert agent.model_client.kwargs["model"] == "deepseek-v4-flash"
     assert not hasattr(agent, "vision_model_client")
-    assert vision_client[0] == "openai"
-    assert vision_client[1]["model"] == "vision-model"
-    assert vision_client[1]["base_url"] == "https://vision.example/v1"
+    assert vision_client.kind == "openai"
+    assert vision_client.provider == "openai"
+    assert vision_client.kwargs["model"] == "vision-model"
+    assert vision_client.kwargs["base_url"] == "https://vision.example/v1"
 
 
 def test_build_agent_uses_vision_specific_client_overrides(tmp_path, monkeypatch):
@@ -208,18 +224,27 @@ def test_build_agent_uses_vision_specific_client_overrides(tmp_path, monkeypatch
     monkeypatch.setenv("GENCODE_VISION_API_BASE", "https://vision.example/v1")
 
     with pytest.MonkeyPatch.context() as patcher:
-        patcher.setattr(gencode_cli, "AnthropicCompatibleModelClient", lambda **kwargs: ("anthropic", kwargs))
-        patcher.setattr(gencode_cli, "OpenAICompatibleModelClient", lambda **kwargs: ("openai", kwargs))
+        patcher.setattr(
+            gencode_cli,
+            "AnthropicCompatibleModelClient",
+            lambda **kwargs: _record_provider_client("anthropic", **kwargs),
+        )
+        patcher.setattr(
+            gencode_cli,
+            "OpenAICompatibleModelClient",
+            lambda **kwargs: _record_provider_client("openai", **kwargs),
+        )
         agent = gencode_cli.build_agent(args)
         vision_client = agent.model_client_router.vision_client()
 
-    assert agent.model_client[0] == "anthropic"
-    assert agent.model_client[1]["model"] == "deepseek-v4-flash"
-    assert vision_client[0] == "openai"
-    assert vision_client[1]["api_key"] == "sk-vision"
-    assert vision_client[1]["model"] == "vision-model"
-    assert vision_client[1]["base_url"] == "https://vision.example/v1"
-    assert vision_client[1]["timeout"] == 45
+    assert agent.model_client.kind == "anthropic"
+    assert agent.model_client.kwargs["model"] == "deepseek-v4-flash"
+    assert vision_client.kind == "openai"
+    assert vision_client.provider == "openai"
+    assert vision_client.kwargs["api_key"] == "sk-vision"
+    assert vision_client.kwargs["model"] == "vision-model"
+    assert vision_client.kwargs["base_url"] == "https://vision.example/v1"
+    assert vision_client.kwargs["timeout"] == 45
 
 
 def test_inspect_image_uses_separate_vision_model_when_configured(tmp_path):

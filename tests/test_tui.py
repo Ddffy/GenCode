@@ -243,7 +243,7 @@ def test_cli_plan_mode_and_session_commands_expose_runtime_state(tmp_path):
     assert "session id:" in output
     assert "events path:" in output
     assert "runtime mode: plan" in output
-    assert "worker summary:" in output
+    assert "git:" in output
 
     handled, _, output = handle_repl_command(agent, "/plan-exit")
     assert handled is True
@@ -251,24 +251,16 @@ def test_cli_plan_mode_and_session_commands_expose_runtime_state(tmp_path):
     assert agent.runtime_mode == "default"
 
 
-def test_slash_command_registry_suggests_and_parses_subagent():
+def test_slash_command_registry_suggests_goal_and_skills():
     from gencode.commands.slash import (
-        parse_subagent_args,
         resolve_command,
         suggest_commands,
     )
 
-    suggestions = suggest_commands("/sub")
+    suggestions = suggest_commands("/go")
 
-    assert suggestions[0].name == "subagent"
-    assert resolve_command("sub").name == "subagent"
-
-    payload, error = parse_subagent_args("worker --scope README.md,src update docs")
-
-    assert error == ""
-    assert payload["subagent_type"] == "worker"
-    assert payload["write_scope"] == ["README.md", "src"]
-    assert payload["prompt"] == "update docs"
+    assert suggestions[0].name == "goal"
+    assert resolve_command("goal").name == "goal"
 
     skill_suggestions = [command.name for command in suggest_commands("/sk")]
     assert "skills" in skill_suggestions
@@ -284,45 +276,30 @@ async def test_tui_slash_suggestions_complete_partial_command(tmp_path):
 
     async with app.run_test() as pilot:
         bar = app.query_one(InputBar)
-        bar.input.value = "/sub"
+        bar.input.value = "/go"
         bar.update_slash_suggestions()
 
         suggestions = app.query_one(SlashSuggestions)
         assert suggestions.visible is True
-        assert "/subagent" in rendered_text(suggestions)
+        assert "/goal" in rendered_text(suggestions)
 
         await pilot.press("tab")
         await pilot.pause(delay=0.1)
 
-        assert bar.input.value == "/subagent "
+        assert bar.input.value == "/goal "
         assert suggestions.visible is False
 
 
-def test_agents_slash_command_shows_worker_status(tmp_path):
-    from gencode.cli import handle_repl_command
+@pytest.mark.asyncio
+async def test_goal_list_displays_goal_state(tmp_path):
+    from gencode.cli import handle_repl_command_async
 
     agent = build_agent(tmp_path, [])
-
-    handled, should_exit, output = handle_repl_command(agent, "/agents")
-
-    assert handled is True
-    assert should_exit is False
-    assert "worker summary:" in output
-
-
-def test_subagent_slash_command_launches_explore_worker(tmp_path):
-    from gencode.cli import handle_repl_command
-
-    agent = build_agent(tmp_path, ["<final>Subagent checked README.</final>"])
-
-    handled, should_exit, output = handle_repl_command(
-        agent, "/subagent explore inspect README"
-    )
+    handled, should_exit, output = await handle_repl_command_async(agent, "/goal list")
 
     assert handled is True
     assert should_exit is False
-    assert "agent_1" in output
-    assert "completed" in output or "started" in output
+    assert output == "No saved Goal."
 
 
 @pytest.mark.asyncio
@@ -369,14 +346,14 @@ async def test_tui_starts_new_assistant_message_after_tool_call(tmp_path, monkey
     app = GenCodeTuiApp(build_agent(tmp_path, []))
     events = [
         {"type": "model_requested", "attempts": 1},
-        {"type": "text_delta", "content": "I'll inspect the worker manager."},
+        {"type": "text_delta", "content": "I'll inspect the Goal manager."},
         {"type": "model_parsed", "kind": "tools"},
-        {"type": "tool_call", "name": "read_file", "args": {"path": "worker_manager.py"}},
-        {"type": "tool_result", "name": "read_file", "content": "class WorkerManager: ..."},
+        {"type": "tool_call", "name": "read_file", "args": {"path": "goal_manager.py"}},
+        {"type": "tool_result", "name": "read_file", "content": "class GoalManager: ..."},
         {"type": "model_requested", "attempts": 2},
-        {"type": "text_delta", "content": "WorkerManager coordinates subagents."},
+        {"type": "text_delta", "content": "GoalManager coordinates isolated workers."},
         {"type": "model_parsed", "kind": "final"},
-        {"type": "final", "content": "WorkerManager coordinates subagents."},
+        {"type": "final", "content": "GoalManager coordinates isolated workers."},
         {"type": "turn_finished"},
     ]
 
@@ -397,8 +374,8 @@ async def test_tui_starts_new_assistant_message_after_tool_call(tmp_path, monkey
         timeline = list(chat.children)
 
         assert [message.content for message in messages] == [
-            "I'll inspect the worker manager.",
-            "WorkerManager coordinates subagents.",
+            "I'll inspect the Goal manager.",
+            "GoalManager coordinates isolated workers.",
         ]
         assert timeline.index(messages[0]) < timeline.index(tool_card)
         assert timeline.index(tool_card) < timeline.index(messages[1])

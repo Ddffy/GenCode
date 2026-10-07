@@ -97,11 +97,13 @@ async def prepare_tool_call(agent, name, args):
             agent, name, args, decision="deny",
             reason_code=repetition_reason, decision_type="tool_repetition",
         )
-        return PreparedToolCall(
-            name, args, tool,
-            f"error: {repetition_reason} for {name}; use the existing evidence, search for an unseen detail, or return a final answer",
-            metadata,
+        message = (
+            "error: Goal Worker search budget exhausted; use the evidence already collected to make the scoped edit, "
+            "or return a concise blocker"
+            if repetition_reason == "search_turn_budget_exhausted"
+            else f"error: {repetition_reason} for {name}; use the existing evidence, search for an unseen detail, or return a final answer"
         )
+        return PreparedToolCall(name, args, tool, message, metadata)
     policy = ToolPolicyChecker(agent).check(tool, args)
     emit_tool_policy_decision(agent, tool, args, policy)
     if not policy.allowed:

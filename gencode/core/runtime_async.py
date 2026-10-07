@@ -78,7 +78,6 @@ class RuntimeAsyncMixin:
         )
 
     async def resume_session_async(self, session_id):
-        await self.worker_manager.shutdown_async()
         return resume_runtime_session(self, session_id)
 
     def clear_session(self):
@@ -91,7 +90,6 @@ class RuntimeAsyncMixin:
         )
 
     async def clear_session_async(self):
-        await self.worker_manager.shutdown_async()
         return clear_runtime_session(self)
 
     async def run_tool(self, name, args):
@@ -116,10 +114,7 @@ class RuntimeAsyncMixin:
                 await lock_stack.enter_async_context(workspace_lease)
                 self.workspace_lock_lease = workspace_lease
             try:
-                if (
-                    str(name) in {"agent", "send_message", "task_stop"}
-                    or (tool is not None and tool.capability.effect == ToolEffect.READ)
-                ):
+                if tool is not None and tool.capability.effect == ToolEffect.READ:
                     return await tool_executor.run_tool(self, name, args)
                 async with self.workspace_write_lock:
                     return await tool_executor.run_tool(self, name, args)
@@ -135,6 +130,3 @@ class RuntimeAsyncMixin:
         if self._bound_async_loop is not None:
             self.workspace_write_lock = asyncio.Lock()
         self._bound_async_loop = loop
-        manager = getattr(self, "worker_manager", None)
-        if manager is not None:
-            manager.bind_loop(loop)

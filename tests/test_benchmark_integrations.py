@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,29 @@ from gencode.testing import ScriptedModelClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _find_bash():
+    candidates = [
+        str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "bin" / "bash.exe"),
+        str(Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Git" / "bin" / "bash.exe"),
+        shutil.which("bash"),
+    ]
+    for path in candidates:
+        if not path or not Path(path).is_file():
+            continue
+        try:
+            result = subprocess.run(
+                [path, "--version"], capture_output=True, text=True, timeout=5
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and "GNU bash" in result.stdout:
+            return path
+    return None
+
+
+BASH = _find_bash()
 
 
 def test_prompt_file_reads_prompt_and_runs_one_shot(tmp_path, capsys):
@@ -204,7 +228,7 @@ def test_harnessbench_metadata_writer_creates_manifest(tmp_path):
     assert "gencode_trace_path" in written["gencode_evidence_missing"]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="benchmark shell wrapper requires a POSIX shell")
+@pytest.mark.skipif(BASH is None, reason="benchmark shell wrapper requires Bash")
 def test_bench_script_env_max_steps_overrides_yaml_arg(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -245,7 +269,9 @@ exit 0
     log_path = tmp_path / "uv.log"
     env = {
         **os.environ,
-        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "PATH": os.pathsep.join(
+            [str(fake_bin), str(Path(BASH).parent), os.environ.get("PATH", "")]
+        ),
         "UV_LOG": str(log_path),
         "CLAWBENCH_SANDBOX": str(sandbox),
         "GENCODE_BENCH_MAX_STEPS": "32",
@@ -253,7 +279,7 @@ exit 0
 
     completed = subprocess.run(
         [
-            "bash",
+            BASH,
             "scripts/bench-gencode.sh",
             "--workspace",
             str(workspace),
@@ -275,7 +301,8 @@ exit 0
     log_text = log_path.read_text(encoding="utf-8")
     assert "--max-steps 32" in log_text
     effective_prompt = sandbox / "gencode-benchmark-prompt.txt"
-    assert f"--prompt-file {effective_prompt}" in log_text
+    normalized_log = log_text.replace("\\", "/")
+    assert f"--prompt-file {effective_prompt.as_posix()}" in normalized_log
     assert "Benchmark artifact discipline" in effective_prompt.read_text(
         encoding="utf-8"
     )

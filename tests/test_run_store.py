@@ -1,5 +1,9 @@
 import json
+import os
 
+import pytest
+
+import gencode.core.atomic_file as atomic_file_module
 from gencode.core.run_store import RunStore
 from gencode.core.task_state import STOP_REASON_FINAL_ANSWER_RETURNED, TaskState
 
@@ -64,3 +68,26 @@ def test_run_store_tolerates_missing_final_report(tmp_path):
 
     assert store.trace_path(state.run_id).exists()
     assert not store.report_path(state.run_id).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only replace sharing semantics")
+def test_run_store_retries_transient_windows_replace_denial(tmp_path, monkeypatch):
+    store = RunStore(tmp_path / ".gencode" / "runs")
+    state = TaskState.create(run_id="run_005", task_id="task_005", user_request="Retry the state save.")
+    replace = atomic_file_module.os.replace
+    calls = []
+
+    def transient_denial(source, destination):
+        calls.append((source, destination))
+        if len(calls) < 3:
+            error = PermissionError("transient sharing violation")
+            error.winerror = 32
+            raise error
+        replace(source, destination)
+
+    monkeypatch.setattr(atomic_file_module.os, "replace", transient_denial)
+    store.start_run(state)
+
+    assert len(calls) == 3
+    assert store.load_task_state(state.run_id)["task_id"] == "task_005"
+    assert list(store.run_dir(state.run_id).glob("*.tmp")) == []

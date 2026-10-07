@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass, field
 
 
@@ -20,6 +19,7 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("compact", "/compact", "Compact older session history."),
     SlashCommand("context", "/context", "Show prompt context usage."),
     SlashCommand("dream", "/dream", "Extract Skill/Wiki/Spec candidates from prior conversations."),
+    SlashCommand("goal", "/goal <objective>", "Run a persistent, bounded DAG Goal with isolated Workers."),
     SlashCommand("history", "/history", "List saved sessions."),
     SlashCommand("knowledge", "/knowledge [approve|reject] [kind:]id", "List or review typed durable knowledge."),
     SlashCommand("memory", "/memory", "Alias for listing typed Skill/Wiki/Spec knowledge."),
@@ -34,13 +34,6 @@ SLASH_COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("skills", "/skills", "List available GenCode skills.", ("sk",)),
     SlashCommand("skill", "/skill <name> [args]", "Load and run a GenCode skill."),
     SlashCommand("spec", "/spec [use|clear] [id]", "List or bind durable task specifications."),
-    SlashCommand("agents", "/agents", "Show subagent worker status.", ("agent",)),
-    SlashCommand(
-        "subagent",
-        "/subagent explore <task>",
-        "Launch a bounded local child run: Explore or scoped worker.",
-        ("sub",),
-    ),
     SlashCommand("usage", "/usage", "Show model/provider usage metadata."),
     SlashCommand("undo", "/undo", "Reset the latest safe GenCode Git commit."),
     SlashCommand("working-memory", "/working-memory", "Show working memory."),
@@ -79,49 +72,3 @@ def suggest_commands(text: str, limit: int = 8) -> list[SlashCommand]:
         if not token or any(name.startswith(token) for name in names):
             matches.append(command)
     return matches[:limit]
-
-
-def parse_subagent_args(args: str) -> tuple[dict | None, str]:
-    usage = "Usage: /subagent explore <task> or /subagent worker --scope <path[,path]> <task>"
-    try:
-        tokens = shlex.split(str(args or ""))
-    except ValueError as exc:
-        return None, f"{usage}. {exc}"
-    if not tokens:
-        return None, usage
-
-    subagent_type = "Explore"
-    if tokens[0].lower() in {"explore", "worker"}:
-        subagent_type = "worker" if tokens.pop(0).lower() == "worker" else "Explore"
-
-    write_scope: list[str] = []
-    task_parts: list[str] = []
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token == "--scope":
-            index += 1
-            if index >= len(tokens):
-                return None, usage
-            write_scope.extend(_split_scope(tokens[index]))
-        elif token.startswith("--scope="):
-            write_scope.extend(_split_scope(token.split("=", 1)[1]))
-        else:
-            task_parts.append(token)
-        index += 1
-
-    prompt = " ".join(task_parts).strip()
-    if not prompt:
-        return None, usage
-    if subagent_type == "worker" and not write_scope:
-        return None, usage
-    return {
-        "description": prompt[:80],
-        "prompt": prompt,
-        "subagent_type": subagent_type,
-        "write_scope": write_scope,
-    }, ""
-
-
-def _split_scope(value: str) -> list[str]:
-    return [item.strip() for item in str(value or "").split(",") if item.strip()]

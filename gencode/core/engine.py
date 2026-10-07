@@ -19,6 +19,7 @@ from .completion_governance import (
 from .context_replacements import commit_proposed_replacements
 from .engine_failures import finish_unexpected_run_error
 from .engine_helpers import (
+    GoalTokenCallBudget,
     _set_fast_read_only_qa,
     complete_runtime_model,
     execute_tool_batch,
@@ -26,9 +27,20 @@ from .engine_helpers import (
     request_step_limit_summary,
     should_retry_model_error,
 )
+from .engine_read_only_qa import (
+    READ_ONLY_QA_ATTEMPT_BUDGET,
+    READ_ONLY_QA_FINAL_NOTICE,
+    _is_read_only_qa_request,
+    _read_only_qa_final_only,
+    _read_only_qa_prompt,
+    _turn_tool_step_budget,
+)
 from .engine_stream import TURN_STREAM_EVENTS, VisibleTextStream
 from .model_errors import finish_model_error
-from .task_state import STOP_REASON_FINAL_GATE_BLOCKED, TaskState
+from .task_state import (
+    STOP_REASON_FINAL_GATE_BLOCKED,
+    TaskState,
+)
 from .turn_transitions import (
     CONTINUE_FINAL_READINESS_NOTICE,
     CONTINUE_PARSE_RETRY,
@@ -40,71 +52,11 @@ from .turn_transitions import (
 from .workspace import clip, now
 
 CHECKPOINT_NONE_STATUS = "no-checkpoint"
-READ_ONLY_QA_STEP_BUDGET = 28
-READ_ONLY_QA_ATTEMPT_BUDGET = 8
-READ_ONLY_QA_EVIDENCE_STEP_BUDGET = 12
-READ_ONLY_QA_FINAL_MAX_NEW_TOKENS = 1800
-READ_ONLY_QA_FINAL_NOTICE = (
-    "Evidence budget reached. Do not call more tools; answer the original question "
-    "now using the evidence already collected. Keep the complete answer under "
-    "about 1200 Chinese characters, with at most five concise bullets."
-)
-
-
-def _is_read_only_qa_request(user_message):
-    text = str(user_message or "").strip().lower()
-    for negated_action in (
-        "不要修改代码", "不修改代码", "无需修改代码", "不需要修改代码",
-        "不要改代码", "不改代码", "do not modify code", "don't modify code",
-        "without modifying code",
-    ):
-        text = text.replace(negated_action, "")
-    question_markers = (
-        "说说", "介绍", "解释", "讲讲", "详细说", "怎么", "如何", "为什么",
-        "是什么", "是否", "对比", "有哪些", "what is", "how does", "explain",
-        "describe", "compare",
-    )
-    action_markers = (
-        "改一下", "修改代码", "帮我改", "帮我实现", "实现这个功能", "修复这个",
-        "添加功能", "删除文件", "运行测试", "执行测试", "提交代码", "commit一下",
-        "please implement", "implement this", "fix this", "change the code",
-        "run tests", "commit the changes",
-    )
-    return any(marker in text for marker in question_markers) and not any(
-        marker in text for marker in action_markers
-    )
-
-
-def _turn_tool_step_budget(user_message, max_steps):
-    if _is_read_only_qa_request(user_message):
-        return min(int(max_steps), READ_ONLY_QA_STEP_BUDGET)
-    return int(max_steps)
-
-
-def _read_only_qa_final_only(*, read_only_qa, tool_steps, native_mode):
-    return bool(
-        read_only_qa
-        and native_mode
-        and int(tool_steps) >= READ_ONLY_QA_EVIDENCE_STEP_BUDGET
-    )
-
-
-def _read_only_qa_prompt(user_message):
-    return (
-        f"{user_message}\n\n"
-        "只读仓库问答执行约束：不要输出探索过程；先用 search(pattern, path) 定位符号，"
-        "再用 read_file(path, start, end) 读取精确代码段；必须显式传 start/end，单次最多 80 行，"
-        "不要整文件读取；不要重复读取同一路径，也不要读取 .gencode/runs 下的产物。"
-        "不使用 Shell，不修改文件；针对跨文件问题沿实际调用链核对入口、结果回传和停止/失败路径，"
-        "证据足够后立即回答。最终用中文控制在约 1000 字以内，覆盖结论、关键运行机制和文件/函数出处；"
-        "区分代码中确认的事实与推断，未核实的细节明确说明。"
-    )
-
-
 class Engine:
     def __init__(self, runtime):
         self.runtime = runtime
         self._background_turn_tasks = set()
+        self._run_tasks = {}
         self.runtime.session_event_bus.set_degradation_handler(
             self._schedule_event_log_degradation
         )
@@ -125,28 +77,6 @@ class Engine:
                 final_answer = event["content"]
         return final_answer
 
-    def drain_worker_notifications(self):
-        agent = self.runtime
-        notifications = agent.worker_manager.drain_notifications()
-        for notification in notifications:
-            agent.record({"role": "user", "content": notification, "created_at": now()})
-            agent.session_event_bus.emit(
-                "worker_notification_drained",
-                {
-                    "run_id": getattr(agent, "current_run_id", ""),
-                    "content": clip(notification, 500),
-                },
-            )
-        return notifications
-
-    def _drain_worker_notification_events(self):
-        for notification in self.drain_worker_notifications():
-            yield {
-                "type": "worker_notification",
-                "run_id": getattr(self.runtime, "current_run_id", ""),
-                "content": notification,
-            }
-
     def _spawn_turn(self, user_message):
         run_ids = asyncio.Queue()
         task = asyncio.create_task(self._run_turn_producer(user_message, run_ids))
@@ -156,6 +86,9 @@ class Engine:
 
     def _observe_background_turn(self, task):
         self._background_turn_tasks.discard(task)
+        for run_id, producer in tuple(self._run_tasks.items()):
+            if producer is task:
+                self._run_tasks.pop(run_id, None)
         if not task.cancelled():
             task.exception()
 
@@ -194,7 +127,15 @@ class Engine:
         """Subscribe to the user-facing subset of a Run, resumable by cursor."""
         async for event in self.subscribe_run(run_id, after_seq):
             if event.get("type") in TURN_STREAM_EVENTS:
+                if event.get("type") == "turn_finished":
+                    await self.wait_for_run(run_id)
                 yield event
+
+    async def wait_for_run(self, run_id):
+        """Wait for producer cleanup after a terminal event has been persisted."""
+        task = self._run_tasks.get(str(run_id))
+        if task is not None and task is not asyncio.current_task():
+            await asyncio.gather(task, return_exceptions=True)
 
     async def run_turn(self, user_message):
         """Start one detached producer and stream its persisted events to this consumer.
@@ -251,7 +192,6 @@ class Engine:
                         break
                     current_message = agent.queued_turns.pop(0)
             finally:
-                await agent.worker_manager.shutdown_async()
                 if not inherited_session_lease:
                     agent.session_lock_lease = None
                 if not inherited_lease:
@@ -329,7 +269,6 @@ class Engine:
         iterator = stream.__aiter__()
         next_event = asyncio.create_task(iterator.__anext__())
         control_task = None
-        worker_task = None
         visible = VisibleTextStream()
         pending_text = ""
         last_text_flush = time.monotonic()
@@ -338,13 +277,9 @@ class Engine:
                 control_queue = agent.turn_control_queue
                 if control_task is None and control_queue is not None:
                     control_task = asyncio.create_task(control_queue.get())
-                if worker_task is None:
-                    worker_task = asyncio.create_task(agent.worker_manager.next_event())
                 waiting = {next_event}
                 if control_task is not None:
                     waiting.add(control_task)
-                if worker_task is not None:
-                    waiting.add(worker_task)
                 wait_timeout = agent.model_idle_timeout
                 if pending_text:
                     wait_timeout = min(
@@ -370,11 +305,6 @@ class Engine:
                     await asyncio.gather(next_event, return_exceptions=True)
                     await iterator.aclose()
                     raise asyncio.TimeoutError("model stream idle timeout")
-                if worker_task is not None and worker_task in done:
-                    yield worker_task.result()
-                    worker_task = None
-                    if next_event not in done:
-                        continue
                 if control_task is not None and control_task in done:
                     control = control_task.result()
                     control_task = None
@@ -386,9 +316,6 @@ class Engine:
                         await self._abort_model_request(agent)
                         next_event.cancel()
                         await asyncio.gather(next_event, return_exceptions=True)
-                        if worker_task is not None:
-                            worker_task.cancel()
-                            await asyncio.gather(worker_task, return_exceptions=True)
                         await iterator.aclose()
                         yield {"type": "_model_steered", "run_id": task_state.run_id}
                         return
@@ -400,9 +327,6 @@ class Engine:
                         await self._abort_model_request(agent)
                         next_event.cancel()
                         await asyncio.gather(next_event, return_exceptions=True)
-                        if worker_task is not None:
-                            worker_task.cancel()
-                            await asyncio.gather(worker_task, return_exceptions=True)
                         await iterator.aclose()
                         yield {"type": "_model_cancelled", "run_id": task_state.run_id}
                         return
@@ -444,13 +368,9 @@ class Engine:
             if not next_event.done():
                 next_event.cancel()
                 await asyncio.gather(next_event, return_exceptions=True)
-            for pending in (control_task, worker_task):
-                if pending is not None and not pending.done():
-                    pending.cancel()
-            await asyncio.gather(
-                *(task for task in (control_task, worker_task) if task is not None),
-                return_exceptions=True,
-            )
+            if control_task is not None and not control_task.done():
+                control_task.cancel()
+                await asyncio.gather(control_task, return_exceptions=True)
             await iterator.aclose()
 
     async def _abort_model_request(self, agent):
@@ -476,6 +396,9 @@ class Engine:
         event_type = str(event.get("type", "event"))
         announced_run_ids = self._announced_run_ids.get()
         if run_id and announced_run_ids is not None and run_id not in announced_run_ids:
+            producer = asyncio.current_task()
+            if producer in self._background_turn_tasks:
+                self._run_tasks[run_id] = producer
             run_id_queue = self._run_id_queue.get()
             if run_id_queue is not None:
                 run_id_queue.put_nowait(run_id)
@@ -563,6 +486,7 @@ class Engine:
             task_id=agent.new_task_id(),
             user_request=user_message,
         )
+        goal_token_calls = GoalTokenCallBudget(self, agent, task_state, run_started_at)
         task_state.resume_status = agent.resume_state.get(
             "status", CHECKPOINT_NONE_STATUS
         )
@@ -605,8 +529,15 @@ class Engine:
         tool_steps = 0
         attempts = 0
         provider_retries = {}
-        read_only_qa = _is_read_only_qa_request(user_message)
-        step_budget = _turn_tool_step_budget(user_message, agent.max_steps)
+        read_only_qa = (
+            not getattr(agent, "disable_fast_read_only_qa", False)
+            and _is_read_only_qa_request(user_message)
+        )
+        step_budget = _turn_tool_step_budget(
+            user_message,
+            agent.max_steps,
+            allow_read_only_qa=not getattr(agent, "disable_fast_read_only_qa", False),
+        )
         max_attempts = min(
             step_budget + 2,
             READ_ONLY_QA_ATTEMPT_BUDGET
@@ -641,10 +572,6 @@ class Engine:
                 ):
                     yield event
                 return
-            for event in self._drain_worker_notification_events():
-                yield event
-            for event in agent.worker_manager.drain_events():
-                yield event
             attempts += 1
             task_state.record_attempt()
             agent.run_store.write_task_state(task_state)
@@ -707,6 +634,13 @@ class Engine:
                 task_state.knowledge_selections = knowledge_trace
                 agent.emit_trace(task_state, "knowledge.retrieval", knowledge_trace)
             handle_prompt_checkpoints(self, task_state, user_message, prompt_metadata)
+            request_max_new_tokens, budget_events = await goal_token_calls.reserve(
+                user_message, prompt, prompt_metadata, qa_final_only
+            )
+            if budget_events:
+                for event in budget_events:
+                    yield event
+                return
             agent.emit_trace(
                 task_state,
                 "model_requested",
@@ -740,6 +674,7 @@ class Engine:
                 native_tools = []
             try:
                 result = None
+                completion_metadata = {}
                 steered = False
                 async for stream_event in self._consume_model_stream(
                     agent,
@@ -747,9 +682,7 @@ class Engine:
                     prompt,
                     model_user_message,
                     native_tools,
-                    min(agent.max_new_tokens, READ_ONLY_QA_FINAL_MAX_NEW_TOKENS)
-                    if qa_final_only
-                    else agent.max_new_tokens,
+                    request_max_new_tokens,
                     prompt_cache_key,
                     prompt_cache_retention,
                 ):
@@ -761,9 +694,12 @@ class Engine:
                         break
                     else:
                         yield stream_event
+                if result is not None:
+                    completion_metadata = await goal_token_calls.record(result)
                 await self._process_control_events()
                 steered = steered or bool(agent.pending_steer_message)
                 if steered:
+                    await goal_token_calls.release()
                     user_message = self._steered_message or agent.pending_steer_message
                     self._steered_message = ""
                     agent.pending_steer_message = ""
@@ -775,6 +711,7 @@ class Engine:
                     )
                     continue
                 if agent.abort_requested:
+                    await goal_token_calls.release()
                     for event in finish_stopped_run(
                         self,
                         task_state,
@@ -787,7 +724,11 @@ class Engine:
                     return
                 if result is None:
                     raise RuntimeError("model stream ended without a completion")
+            except asyncio.CancelledError:
+                await goal_token_calls.release()
+                raise
             except Exception as exc:  # Normalize provider/runtime failures into a stopped run.  # noqa: BLE001
+                await goal_token_calls.release()
                 if agent.abort_requested:
                     for event in finish_stopped_run(
                         self,
@@ -858,11 +799,12 @@ class Engine:
                     yield event
                 return
             raw = result.text
-            completion_metadata = dict(
-                result.metadata
-                or getattr(agent.model_client, "last_completion_metadata", {})
-                or {}
-            )
+            if not completion_metadata:
+                completion_metadata = dict(
+                    result.metadata
+                    or getattr(agent.model_client, "last_completion_metadata", {})
+                    or {}
+                )
             if completion_metadata:
                 prompt_metadata.update(completion_metadata)
             agent.last_completion_metadata = completion_metadata
@@ -907,6 +849,7 @@ class Engine:
                 {
                     "kind": kind,
                     "completion_metadata": completion_metadata,
+                    "goal_token_usage": task_state.evidence_summaries.get("goal_token_usage"),
                     "duration_ms": duration_ms,
                 },
             )
@@ -918,6 +861,11 @@ class Engine:
             }
 
             if kind in {"tool", "tools"}:
+                budget_events = goal_token_calls.stop_before_tool(user_message)
+                if budget_events:
+                    for event in budget_events:
+                        yield event
+                    return
                 tools = [payload] if kind == "tool" else list(payload)
                 attempted = [0]
                 async for event in execute_tool_batch(
@@ -969,8 +917,6 @@ class Engine:
                 continue
 
             final = (payload or raw).strip()
-            for event in self._drain_worker_notification_events():
-                yield event
             if agent.runtime_mode == "plan" and not agent.plan_mode.can_finish():
                 notice = agent.plan_mode.final_notice()
                 agent.record(
@@ -1018,7 +964,6 @@ class Engine:
                     yield event
                 return
 
-            await agent.worker_manager.wait_idle()
             await self._process_control_events()
             if agent.abort_requested:
                 for event in finish_stopped_run(
@@ -1037,10 +982,6 @@ class Engine:
                 agent.memory.set_task_summary(user_message)
                 agent.record({"role": "user", "content": user_message, "created_at": now()})
                 continue
-            for event in agent.worker_manager.drain_events():
-                yield event
-            for event in self._drain_worker_notification_events():
-                yield event
             for event in finish_successful_run(
                 self, task_state, user_message, final, run_started_at
             ):
@@ -1049,7 +990,11 @@ class Engine:
 
         attempts_exhausted = attempts >= max_attempts and tool_steps < step_budget
         summary = None
-        if tool_steps > 0 and (attempts_exhausted or tool_steps >= step_budget):
+        if (
+            not goal_token_calls.enabled
+            and tool_steps > 0
+            and (attempts_exhausted or tool_steps >= step_budget)
+        ):
             summary = await request_step_limit_summary(self, task_state, user_message)
         if summary:
             final = f"{summary}\n\nstep 预算上限已耗尽；如需继续，请使用 /resume。"

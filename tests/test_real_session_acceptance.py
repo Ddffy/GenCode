@@ -1,5 +1,5 @@
-import json
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -18,14 +18,13 @@ def test_gate8_acceptance_harness_writes_real_session_evidence_bundle(tmp_path):
     summary = run_acceptance(output_dir)
 
     assert summary["status"] == "passed"
-    assert summary["scenario_count"] >= 9
+    assert summary["scenario_count"] >= 8
 
     scenario_ids = {scenario["id"] for scenario in summary["scenarios"]}
     assert {
         "bugfix_pytest",
-        "plan_todo_explore",
+        "plan_todo_artifact",
         "skill_inline",
-        "worker_write_scope",
         "resume_continuation",
         "security_rejection",
         "context_pressure",
@@ -65,16 +64,9 @@ def test_gate8_acceptance_harness_writes_real_session_evidence_bundle(tmp_path):
         "    return a + b\n"
     )
 
-    plan = next(scenario for scenario in summary["scenarios"] if scenario["id"] == "plan_todo_explore")
+    plan = next(scenario for scenario in summary["scenarios"] if scenario["id"] == "plan_todo_artifact")
     plan_report = json.loads((output_dir / plan["report_path"]).read_text(encoding="utf-8"))
     assert plan_report["todos"]["items"][0]["status"] == "done"
-    assert plan_report["workers"]["items"][0]["subagent_type"] == "Explore"
-
-    worker = next(scenario for scenario in summary["scenarios"] if scenario["id"] == "worker_write_scope")
-    worker_report = json.loads((output_dir / worker["report_path"]).read_text(encoding="utf-8"))
-    assert worker_report["workers"]["items"][0]["write_scope"] == ["notes"]
-    assert (output_dir / worker["workspace_relpath"] / "notes" / "first.txt").read_text(encoding="utf-8") == "first\n"
-    assert (output_dir / worker["workspace_relpath"] / "notes" / "second.txt").read_text(encoding="utf-8") == "second\n"
 
     resume = next(scenario for scenario in summary["scenarios"] if scenario["id"] == "resume_continuation")
     resume_report = json.loads((output_dir / resume["report_path"]).read_text(encoding="utf-8"))
@@ -91,8 +83,7 @@ def test_gate8_acceptance_harness_writes_real_session_evidence_bundle(tmp_path):
     assert any(event.get("tool_error_code") == "invalid_arguments" for event in security_events)
     security_report = json.loads((output_dir / security["report_path"]).read_text(encoding="utf-8"))
     assert security_report["redacted_env"]["secret_env_count"] >= 1
-    assert "write_scope_mismatch" in security_report["workers"]["items"][0]["tool_error_codes"]
-    assert security_report["workers"]["items"][0]["trace_path"]
+    assert "workers" not in security_report
 
     context = next(scenario for scenario in summary["scenarios"] if scenario["id"] == "context_pressure")
     context_report = json.loads((output_dir / context["report_path"]).read_text(encoding="utf-8"))
@@ -112,4 +103,4 @@ def test_gate8_acceptance_harness_writes_real_session_evidence_bundle(tmp_path):
     assert json.loads(summary_path.read_text(encoding="utf-8"))["status"] == "passed"
     markdown = markdown_path.read_text(encoding="utf-8")
     assert "Gate8 Real Session Acceptance" in markdown
-    assert "plan_todo_explore" in markdown
+    assert "plan_todo_artifact" in markdown

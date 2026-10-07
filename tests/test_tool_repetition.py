@@ -49,6 +49,32 @@ def test_same_file_read_budget_stops_unbounded_window_scanning():
     ) == "read_file_path_budget_exhausted"
 
 
+def test_goal_worker_search_budget_stops_keyword_churn():
+    history = [{"role": "user", "content": "implement the requested change"}]
+    history.extend(
+        {
+            "role": "tool",
+            "name": "search",
+            "args": {"path": "src/cli.ts", "pattern": f"term_{index}"},
+            "content": f"match {index}",
+            "tool_status": "ok",
+        }
+        for index in range(16)
+    )
+
+    assert tool_call_repetition_reason(
+        history,
+        "search",
+        {"path": "src/cli.ts", "pattern": "a new keyword"},
+        max_search_calls=16,
+    ) == "search_turn_budget_exhausted"
+    assert not tool_call_repetition_reason(
+        history,
+        "search",
+        {"path": "src/cli.ts", "pattern": "a new keyword"},
+    )
+
+
 def test_file_write_resets_prior_read_evidence_for_that_file():
     history = [
         {"role": "user", "content": "inspect then update"},

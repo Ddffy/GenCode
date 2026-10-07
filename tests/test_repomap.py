@@ -54,6 +54,17 @@ def test_extract_python_tags(repo):
     assert "load" in names
 
 
+def test_source_file_walk_skips_node_modules(repo):
+    dependency_file = repo / "node_modules" / "example" / "index.js"
+    dependency_file.parent.mkdir(parents=True)
+    dependency_file.write_text("export function dependency() {}\n", encoding="utf-8")
+
+    files = graphlib.collect_source_files(repo)
+
+    assert "node_modules/example/index.js" not in files
+    assert "service.py" in files
+
+
 @requires_pack
 def test_reference_graph_builds_weighted_edges(repo):
     tags_by_file = graphlib.load_tags(repo)

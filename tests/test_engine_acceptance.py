@@ -153,26 +153,6 @@ def test_engine_records_provider_error_as_failed_run(tmp_path):
     )
 
 
-def test_worker_notification_drained_during_turn_is_streamed(tmp_path):
-    agent = build_agent(
-        tmp_path,
-        [
-            '<tool>{"name":"agent","args":{"description":"Inspect","prompt":"Read README","subagent_type":"Explore"}}</tool>',
-            "<final>Child done.</final>",
-            "<final>Parent done.</final>",
-        ],
-        max_steps=3,
-    )
-
-    events = collect_events(agent.engine.run_turn("delegate and continue"))
-
-    notifications = [
-        event for event in events if event["type"] == "worker_notification"
-    ]
-    assert len(notifications) == 1
-    assert "<task-id>agent_1</task-id>" in notifications[0]["content"]
-
-
 def test_verification_signal_passes_after_workspace_verification(tmp_path):
     command = subprocess.list2cmdline([sys.executable, "-m", "compileall", "notes"])
     agent = build_agent(

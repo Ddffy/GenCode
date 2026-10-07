@@ -78,7 +78,6 @@ class GenCodeTuiApp(App):
     def on_mount(self) -> None:
         self.query_one(StatusBar).update_agent(self.agent)
         self.query_one(InputBar).focus_input()
-        self.set_interval(0.5, self._drain_idle_worker_notifications)
 
     def on_unmount(self) -> None:
         if self._previous_approve is not None:
@@ -202,17 +201,6 @@ class GenCodeTuiApp(App):
             after_seq=self._active_run_seq,
         )
 
-    def _drain_idle_worker_notifications(self) -> None:
-        if self._active_turn_task is not None:
-            return
-        notifications = self.agent.engine.drain_worker_notifications()
-        if not notifications:
-            return
-        chat = self.query_one(ChatLog)
-        for notification in notifications:
-            chat.add_message("assistant", f"[worker notification]\n{notification}")
-        self.query_one(StatusBar).update_agent(self.agent)
-
     async def _agent_task(self, text: str, *, run_id="", after_seq=0) -> None:
         completed = False
         pending_render = None
@@ -297,19 +285,6 @@ class GenCodeTuiApp(App):
         if event_type == "tool_result":
             self._finish_tool_card(event)
             self.query_one(ThinkingIndicator).set_detail("thinking after tool")
-            return
-        if event_type == "worker_notification":
-            self.query_one(ChatLog).add_message(
-                "assistant", f"[worker notification]\n{event.get('content', '')}"
-            )
-            return
-        if event_type == "worker_event":
-            nested = event.get("event") if isinstance(event.get("event"), dict) else {}
-            if nested.get("type") == "text_delta":
-                self.query_one(ChatLog).add_message(
-                    "assistant",
-                    f"[{event.get('source', 'worker')}] {nested.get('content', '')}",
-                )
             return
         if event_type in {"retry", "runtime_notice", "final", "stop"}:
             content = str(event.get("content", ""))

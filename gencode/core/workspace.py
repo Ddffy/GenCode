@@ -17,7 +17,7 @@ MAX_HISTORY = 12000
 # 这些文件最可能直接影响 agent 的行动方式。
 # 我们不会预加载整个仓库，只会先给模型一小份“导航包”。
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
-IGNORED_PATH_NAMES = {".git", ".gencode", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
+IGNORED_PATH_NAMES = {".git", ".gencode", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules"}
 
 
 def now():
@@ -110,19 +110,23 @@ class WorkspaceContext:
             project_docs=docs,
         )
 
-    def text(self):
+    def text(self, *, cache_stable=False):
         # 这段文本会被塞进 prompt prefix，作为相对稳定的基线上下文。
         commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
         docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
+        cwd = "<repository root>" if cache_stable else self.cwd
+        repo_root = "<repository root>" if cache_stable else self.repo_root
+        branch = "<isolated goal worktree>" if cache_stable else self.branch
+        status = "<inspect with tools>" if cache_stable else self.status
         return textwrap.dedent(
             f"""\
             Workspace:
-            - cwd: {self.cwd}
-            - repo_root: {self.repo_root}
-            - branch: {self.branch}
+            - cwd: {cwd}
+            - repo_root: {repo_root}
+            - branch: {branch}
             - default_branch: {self.default_branch}
             - status:
-            {self.status}
+            {status}
             - recent_commits:
             {commits}
             - project_docs:
