@@ -7,10 +7,10 @@ import pytest
 from conftest import collect_events, run_tool
 
 import gencode.cli as gencode_cli
-from gencode.core.model_router import ModelClientRouter
-from gencode.core.runtime import GenCode
-from gencode.core.session_store import SessionStore
-from gencode.core.workspace import WorkspaceContext
+from gencode.core.runtime.model_io.model_router import ModelClientRouter
+from gencode.core.runtime.runtime import GenCode
+from gencode.core.runtime.persistence.session_store import SessionStore
+from gencode.core.runtime.workspace_context import WorkspaceContext
 from gencode.providers.clients import (
     AnthropicCompatibleModelClient,
     OpenAICompatibleModelClient,
@@ -71,7 +71,7 @@ def write_png(tmp_path, name="chart.png"):
 
 
 def test_openai_client_sends_image_blocks_in_responses_payload(monkeypatch):
-    from gencode.core.content_blocks import ImageBlock, ModelInput
+    from gencode.core.runtime.model_io.content_blocks import ImageBlock, ModelInput
 
     captured = {}
 
@@ -108,7 +108,7 @@ def test_openai_client_sends_image_blocks_in_responses_payload(monkeypatch):
 
 
 def test_anthropic_client_sends_image_blocks_in_messages_payload(monkeypatch):
-    from gencode.core.content_blocks import ImageBlock, ModelInput
+    from gencode.core.runtime.model_io.content_blocks import ImageBlock, ModelInput
 
     captured = {}
 
@@ -248,8 +248,8 @@ def test_build_agent_uses_vision_specific_client_overrides(tmp_path, monkeypatch
 
 
 def test_inspect_image_uses_separate_vision_model_when_configured(tmp_path):
-    from gencode.core.content_blocks import ModelInput
-    from gencode.core.task_state import TaskState
+    from gencode.core.runtime.model_io.content_blocks import ModelInput
+    from gencode.core.runtime.task_state import TaskState
 
     write_png(tmp_path)
     main_client = RecordingVisionClient(["unused main model output"])
@@ -272,7 +272,7 @@ def test_inspect_image_uses_separate_vision_model_when_configured(tmp_path):
 
 
 def test_inspect_image_keeps_medium_summary_inline(tmp_path):
-    from gencode.core.task_state import TaskState
+    from gencode.core.runtime.task_state import TaskState
 
     write_png(tmp_path)
     summary = "vision detail\n" * 180
@@ -290,7 +290,7 @@ def test_inspect_image_keeps_medium_summary_inline(tmp_path):
 
 
 def test_image_inspection_prompt_preserves_complete_ocr_extraction():
-    from gencode.core.vision import image_inspection_prompt
+    from gencode.core.runtime.model_io.vision import image_inspection_prompt
 
     prompt = image_inspection_prompt(
         "rows.png",
@@ -305,8 +305,8 @@ def test_image_inspection_prompt_preserves_complete_ocr_extraction():
 
 
 def test_vision_model_call_has_total_timeout(monkeypatch):
-    from gencode.core.content_blocks import ModelInput
-    from gencode.core.vision import complete_model_with_timeout
+    from gencode.core.runtime.model_io.content_blocks import ModelInput
+    from gencode.core.runtime.model_io.vision import complete_model_with_timeout
     from gencode.providers.base import ModelResult, ModelStreamEvent
 
     class SlowClient:
@@ -316,7 +316,7 @@ def test_vision_model_call_has_total_timeout(monkeypatch):
         await asyncio.sleep(0.2)
         yield ModelStreamEvent("completed", result=ModelResult(text="done"))
 
-    monkeypatch.setattr("gencode.core.vision.stream_model", slow_stream)
+    monkeypatch.setattr("gencode.core.runtime.model_io.vision.stream_model", slow_stream)
 
     with pytest.raises(TimeoutError, match="vision provider request exceeded"):
         asyncio.run(
@@ -325,7 +325,7 @@ def test_vision_model_call_has_total_timeout(monkeypatch):
 
 
 def test_load_workspace_image_rejects_path_escape_and_records_safe_metadata(tmp_path):
-    from gencode.core.media import load_workspace_image
+    from gencode.core.runtime.model_io.media import load_workspace_image
 
     write_png(tmp_path)
     outside = tmp_path.parent / "outside.png"
@@ -343,7 +343,7 @@ def test_load_workspace_image_rejects_path_escape_and_records_safe_metadata(tmp_
 
 
 def test_load_workspace_image_rejects_fake_image_extension(tmp_path):
-    from gencode.core.media import load_workspace_image
+    from gencode.core.runtime.model_io.media import load_workspace_image
 
     (tmp_path / "fake.png").write_text("not really a png\n", encoding="utf-8")
     agent = build_agent(tmp_path)
@@ -353,7 +353,7 @@ def test_load_workspace_image_rejects_fake_image_extension(tmp_path):
 
 
 def test_run_store_writes_binary_artifact(tmp_path):
-    from gencode.core.task_state import TaskState
+    from gencode.core.runtime.task_state import TaskState
 
     agent = build_agent(tmp_path)
     task_state = TaskState.create(run_id="run_test", task_id="task_test", user_request="inspect")
@@ -365,8 +365,8 @@ def test_run_store_writes_binary_artifact(tmp_path):
 
 
 def test_inspect_image_tool_calls_model_with_model_input_and_records_media_refs(tmp_path):
-    from gencode.core.content_blocks import ModelInput
-    from gencode.core.task_state import TaskState
+    from gencode.core.runtime.model_io.content_blocks import ModelInput
+    from gencode.core.runtime.task_state import TaskState
 
     write_png(tmp_path)
     client = RecordingVisionClient(["The image contains a one-pixel chart."])

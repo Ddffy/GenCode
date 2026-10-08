@@ -7,8 +7,8 @@ import pytest
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.cli import handle_repl_command_async
 from gencode.commands.slash import resolve_command, suggest_commands
-from gencode.core.goal_graph import GoalPlanError, validate_plan
-from gencode.core.goal_manager import (
+from gencode.core.runtime.goal_graph import GoalPlanError, validate_plan
+from gencode.core.runtime.goal_manager import (
     _has_only_scoped_changes,
     _verifier_process_args,
     _worker_failure_summary,
@@ -192,8 +192,8 @@ async def test_goal_token_budget_rejects_model_call_before_provider_request(tmp_
 
 @pytest.mark.asyncio
 async def test_goal_token_budget_records_usage_and_recovers_pending_reservations(tmp_path):
-    from gencode.core.goal_budget import GoalTokenBudget
-    from gencode.core.goal_store import GoalStore
+    from gencode.core.runtime.goal_budget import GoalTokenBudget
+    from gencode.core.runtime.persistence.goal_store import GoalStore
 
     store = GoalStore(tmp_path / "goals")
     goal = {
@@ -233,8 +233,8 @@ async def test_goal_token_budget_records_usage_and_recovers_pending_reservations
 
 @pytest.mark.asyncio
 async def test_goal_token_budget_enforces_worker_allocation(tmp_path):
-    from gencode.core.goal_budget import GoalTokenBudget
-    from gencode.core.goal_store import GoalStore
+    from gencode.core.runtime.goal_budget import GoalTokenBudget
+    from gencode.core.runtime.persistence.goal_store import GoalStore
 
     store = GoalStore(tmp_path / "goals")
     goal = {
@@ -263,9 +263,9 @@ async def test_goal_token_budget_enforces_worker_allocation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_goal_budget_does_not_execute_tool_after_usage_exceeds_role_cap(tmp_path):
-    from gencode.core.goal_budget import GoalTokenBudget
-    from gencode.core.goal_store import GoalStore
-    from gencode.core.task_state import STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED
+    from gencode.core.runtime.goal_budget import GoalTokenBudget
+    from gencode.core.runtime.persistence.goal_store import GoalStore
+    from gencode.core.runtime.task_state import STOP_REASON_GOAL_TOKEN_BUDGET_EXHAUSTED
     from gencode.providers.base import ModelResult, ModelStreamEvent
 
     class ToolRequestClient:
@@ -372,7 +372,7 @@ async def test_goal_verifies_scoped_candidate_when_worker_reaches_step_limit(tmp
 
 
 def test_windows_package_verifiers_use_command_processor(monkeypatch):
-    from gencode.core import goal_manager
+    from gencode.core.runtime import goal_manager
 
     monkeypatch.setattr(goal_manager.os, "name", "nt")
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")

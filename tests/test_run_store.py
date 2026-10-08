@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-import gencode.core.atomic_file as atomic_file_module
-from gencode.core.run_store import RunStore
-from gencode.core.task_state import STOP_REASON_FINAL_ANSWER_RETURNED, TaskState
+import gencode.core.runtime.persistence.atomic_file as atomic_file_module
+from gencode.core.runtime.persistence.run_store import RunStore
+from gencode.core.runtime.task_state import STOP_REASON_FINAL_ANSWER_RETURNED, TaskState
 
 
 def test_run_store_creates_run_directory_and_state_file(tmp_path):

@@ -8,7 +8,7 @@ from conftest import run_tool
 
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode import cli as gencode_cli
-from gencode.core.task_state import TaskState
+from gencode.core.runtime.task_state import TaskState
 from gencode.testing import ScriptedModelClient
 
 
@@ -173,7 +173,7 @@ def test_bound_tool_methods_call_tools_module(tmp_path):
 
     assert "toolkit-shell" in shell_result
     fake_run.assert_awaited_once()
-    assert agent.tool_run_shell.__func__.__module__ == "gencode.core.runtime"
+    assert agent.tool_run_shell.__func__.__module__ == "gencode.core.runtime.runtime"
 
 
 def test_configured_secret_env_names_are_redacted_in_trace_and_report(tmp_path):

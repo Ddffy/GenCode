@@ -1,4 +1,4 @@
-from gencode.core.context_pressure import ContextPressure, ContextPressureController
+from gencode.core.context.context_pressure import ContextPressure, ContextPressureController
 
 
 def identity(**overrides):
@@ -128,7 +128,7 @@ def test_cache_tokens_are_not_current_when_identity_mismatches():
 
 def test_sanitized_provider_base_url_matches_without_secret_leak(tmp_path):
     from gencode import GenCode, SessionStore, WorkspaceContext
-    from gencode.core.context_manager import ContextManager
+    from gencode.core.context.context_manager import ContextManager
     from gencode.testing import ScriptedModelClient
 
     (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")

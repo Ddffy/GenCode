@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from gencode.config import resolve_provider_config
-from gencode.core.context_usage import detect_content_type, estimate_tokens_typed
+from gencode.core.context.context_usage import detect_content_type, estimate_tokens_typed
 from gencode.features.repomap import RepoMapBuilder
 from gencode.features.repomap import graph as graphlib
 from gencode.features.repomap import rank as ranklib

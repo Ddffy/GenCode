@@ -6,8 +6,8 @@ import pytest
 from conftest import collect_stream_events
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.runtime_locks import RuntimeLockManager
-from gencode.core.session_events import SessionEventBus
+from gencode.core.runtime.session.runtime_locks import RuntimeLockManager
+from gencode.core.runtime.session.session_events import SessionEventBus
 from gencode.providers.base import ModelResult, ModelStreamEvent
 from gencode.testing import ScriptedModelClient
 from gencode.tools.base import RegisteredTool

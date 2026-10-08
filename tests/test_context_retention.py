@@ -1,5 +1,5 @@
-from gencode.core.context_retention import ContextRetentionPolicy, RetentionContext
-from gencode.core.turn_history import should_render_tool_inline
+from gencode.core.context.context_retention import ContextRetentionPolicy, RetentionContext
+from gencode.core.context.turn_history import should_render_tool_inline
 
 
 def retention_context(**overrides):

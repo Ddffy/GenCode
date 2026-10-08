@@ -11,7 +11,7 @@ import hashlib
 from collections import defaultdict, deque
 from pathlib import Path
 
-from ...core.workspace import IGNORED_PATH_NAMES
+from ...core.runtime.workspace_context import IGNORED_PATH_NAMES
 from . import tag_cache as cachelib
 from . import tags as tagslib
 

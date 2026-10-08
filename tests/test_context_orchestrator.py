@@ -1,8 +1,8 @@
 import asyncio
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.context_budget_summary import context_budget_summary
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.context_budget_summary import context_budget_summary
+from gencode.core.context.context_manager import ContextManager
 from gencode.providers.base import ModelResult, ModelStreamEvent
 from gencode.testing import ScriptedModelClient
 

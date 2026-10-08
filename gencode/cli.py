@@ -22,9 +22,9 @@ from .config import (
     load_project_env,
     resolve_project_sandbox_config,
 )
-from .core.model_router import ModelClientRouter
-from .core.runtime import GenCode, SessionStore
-from .core.workspace import WorkspaceContext, middle, now
+from .core.runtime.model_io.model_router import ModelClientRouter
+from .core.runtime.runtime import GenCode, SessionStore
+from .core.runtime.workspace_context import WorkspaceContext, middle, now
 from .features import memory as memorylib
 from .features import skills as skillslib
 from .features.skills_runtime import invoke_skill, invoke_skill_async

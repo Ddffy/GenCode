@@ -7,7 +7,7 @@ from functools import partial
 
 from pydantic import ValidationError
 
-from ..core.workspace import IGNORED_PATH_NAMES
+from ..core.runtime.workspace_context import IGNORED_PATH_NAMES
 from . import knowledge as knowledge_tools
 from . import media as media_tools
 from . import repomap as repomap_tools

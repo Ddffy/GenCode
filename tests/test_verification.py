@@ -1,6 +1,6 @@
 """Unit tests for verification signal extraction from tool traces."""
 
-from gencode.core.verification import reduce_verification_signal
+from gencode.core.evidence.verification import reduce_verification_signal
 
 
 def tool_event(command, status="ok"):

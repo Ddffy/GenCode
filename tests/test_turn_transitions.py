@@ -2,7 +2,7 @@
 
 import pytest
 
-from gencode.core.turn_transitions import (
+from gencode.core.runtime.turn_transitions import (
     CONTINUE_TOOL_BATCH_EXECUTED,
     TERMINAL_FINAL_ANSWER_RETURNED,
     build_transition,

@@ -7,9 +7,9 @@ Pydantic models underneath.
 
 import pytest
 
-from gencode.core.runtime import GenCode
-from gencode.core.session_store import SessionStore
-from gencode.core.workspace import WorkspaceContext
+from gencode.core.runtime.runtime import GenCode
+from gencode.core.runtime.persistence.session_store import SessionStore
+from gencode.core.runtime.workspace_context import WorkspaceContext
 from gencode.testing import ScriptedModelClient
 
 

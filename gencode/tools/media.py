@@ -1,6 +1,6 @@
 """Media inspection tools."""
 
-from ..core import vision
+from ..core.runtime.model_io import vision
 
 MEDIA_TOOL_NAMES = {"inspect_image"}
 

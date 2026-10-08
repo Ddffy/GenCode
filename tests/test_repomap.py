@@ -4,7 +4,7 @@ from typing import ClassVar
 
 import pytest
 
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.context_manager import ContextManager
 from gencode.features.repomap import RepoMapBuilder
 from gencode.features.repomap import graph as graphlib
 from gencode.features.repomap import rank as ranklib

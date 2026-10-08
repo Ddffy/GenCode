@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from ..core.workspace import clip, now
+from ..core.runtime.workspace_context import clip, now
 
 WORKING_FILE_LIMIT = 8
 EPISODIC_NOTE_LIMIT = 12

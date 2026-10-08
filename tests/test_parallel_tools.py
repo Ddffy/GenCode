@@ -3,7 +3,7 @@ import asyncio
 from conftest import collect_events
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.parallel_tools import can_parallelize_tool_batch
+from gencode.core.actions.parallel_tools import can_parallelize_tool_batch
 from gencode.providers import ModelResult
 from gencode.testing import NativeScriptedModelClient
 from gencode.tools.base import (

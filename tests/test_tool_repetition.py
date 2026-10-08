@@ -1,4 +1,4 @@
-from gencode.core.tool_repetition import tool_call_repetition_reason
+from gencode.core.actions.tool_repetition import tool_call_repetition_reason
 
 
 def _read(path, start, end, *, content=None, artifact_ref=""):

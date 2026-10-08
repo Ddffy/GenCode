@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import resolve_provider_config
-from ..core.runtime import GenCode, SessionStore
-from ..core.workspace import WorkspaceContext
+from ..core.runtime.runtime import GenCode, SessionStore
+from ..core.runtime.workspace_context import WorkspaceContext
 from ..features.memory import (
     LayeredMemory,
     compute_anchor_hash,

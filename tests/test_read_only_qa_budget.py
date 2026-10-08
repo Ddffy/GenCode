@@ -3,15 +3,15 @@ import asyncio
 import pytest
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core import engine_helpers
-from gencode.core.engine import (
+from gencode.core.runtime import engine_helpers
+from gencode.core.runtime.engine import (
     _is_read_only_qa_request,
     _read_only_qa_final_only,
     _read_only_qa_prompt,
     _set_fast_read_only_qa,
     _turn_tool_step_budget,
 )
-from gencode.core.task_state import TaskState
+from gencode.core.runtime.task_state import TaskState
 from gencode.testing import ScriptedModelClient
 from gencode.tools.registry import tool_read_file
 
@@ -182,7 +182,7 @@ async def test_step_limit_summary_repeats_request_and_requires_final_protocol(mo
 
         @staticmethod
         def parse(text):
-            from gencode.core.model_output import parse
+            from gencode.core.runtime.model_io.model_output import parse
 
             return parse(text)
 

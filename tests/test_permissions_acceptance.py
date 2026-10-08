@@ -4,7 +4,7 @@ from conftest import run_tool
 
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.cli import handle_repl_command
-from gencode.core.permissions import PermissionDecision
+from gencode.core.actions.permissions import PermissionDecision
 from gencode.features.sandbox.config import SandboxConfig
 from gencode.testing import ScriptedModelClient
 

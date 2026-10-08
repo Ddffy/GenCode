@@ -1,7 +1,7 @@
 from gencode.testing import ScriptedModelClient
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.context_report import ContextReportBuilder
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.context_report import ContextReportBuilder
+from gencode.core.context.context_manager import ContextManager
 
 
 def build_workspace(tmp_path):

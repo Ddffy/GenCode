@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 
-from ..core.tool_profiles import ToolSetProfile
+from ..core.actions.tool_profiles import ToolSetProfile
 
 
 def invoke_skill(agent, name, arguments=""):

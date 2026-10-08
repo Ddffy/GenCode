@@ -1,11 +1,11 @@
 """Unit tests for final-readiness gate decisions and notices."""
 
-from gencode.core.final_readiness import (
+from gencode.core.evidence.final_readiness import (
     evaluate_final_readiness,
     extract_required_artifact_paths,
     readiness_notice,
 )
-from gencode.core.task_state import TaskState
+from gencode.core.runtime.task_state import TaskState
 
 
 def task_state():
@@ -312,7 +312,7 @@ def test_readiness_notice_uses_catalog_messages_not_raw_codes():
 
 
 def test_final_readiness_summary_has_schema_version():
-    from gencode.core.final_readiness import reduce_final_readiness_summary
+    from gencode.core.evidence.final_readiness import reduce_final_readiness_summary
 
     summary = reduce_final_readiness_summary({}, {"decision": "warn", "reasons": []})
 

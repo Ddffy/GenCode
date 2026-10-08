@@ -281,7 +281,7 @@ def test_native_final_without_tools_is_accepted_as_plain_text(tmp_path, monkeypa
             yield ModelStreamEvent("completed", result=result)
 
     monkeypatch.setattr(
-        "gencode.core.engine_read_only_qa.READ_ONLY_QA_EVIDENCE_STEP_BUDGET", 1
+        "gencode.core.runtime.engine_read_only_qa.READ_ONLY_QA_EVIDENCE_STEP_BUDGET", 1
     )
     client = FakeNativeClient()
     agent = GenCode(
@@ -333,7 +333,7 @@ def test_native_history_window_never_splits_a_tool_call_group():
     报错原文是 "each tool_result block must have a corresponding tool_use block"，
     位置固定在 messages[0].content[0]——也就是被切掉调用方的那条结果。
     """
-    from gencode.core.native_messages import _native_history_tail
+    from gencode.core.runtime.model_io.native_messages import _native_history_tail
     from gencode.providers.clients import _anthropic_messages_to_payload
 
     for prepend in range(14):
@@ -365,7 +365,7 @@ def test_native_history_window_never_splits_a_tool_call_group():
 
 
 def test_native_history_drops_tool_results_without_their_call():
-    from gencode.core.native_messages import _native_history_tail
+    from gencode.core.runtime.model_io.native_messages import _native_history_tail
 
     history = [
         {"role": "user", "content": "做点事"},
@@ -400,7 +400,7 @@ def test_native_history_drops_tool_use_without_a_result():
     after"，而且是**下一次请求**才报——所以它会让会话永久不可用，不只是当轮失败。
     这里断言已经损坏的历史仍然能被发送出去。
     """
-    from gencode.core.native_messages import _native_history_tail
+    from gencode.core.runtime.model_io.native_messages import _native_history_tail
     from gencode.providers.clients import _anthropic_messages_to_payload
 
     damaged = [
@@ -439,7 +439,7 @@ def test_native_history_drops_tool_use_without_a_result():
 
 def test_skipped_tool_call_records_a_result_for_the_orphan():
     """产生源修复：预算用尽时不是 break，而是给被跳过的调用补一条结果。"""
-    from gencode.core.engine_helpers import record_skipped_tool_call
+    from gencode.core.runtime.engine_helpers import record_skipped_tool_call
 
     class _TaskState:
         run_id = "run-1"

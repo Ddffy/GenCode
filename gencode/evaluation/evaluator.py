@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 
 from ..features import memory as memorylib
 from ..testing import ScriptedModelClient
-from ..core.runtime import GenCode, SessionStore
-from ..core.run_store import RunStore
-from ..core.task_state import STOP_REASON_FINAL_ANSWER_RETURNED
-from ..core.workspace import WorkspaceContext
+from ..core.runtime.runtime import GenCode, SessionStore
+from ..core.runtime.persistence.run_store import RunStore
+from ..core.runtime.task_state import STOP_REASON_FINAL_ANSWER_RETURNED
+from ..core.runtime.workspace_context import WorkspaceContext
 from .commands import portable_verifier_command
 
 BENCHMARK_SCHEMA_VERSION = 1

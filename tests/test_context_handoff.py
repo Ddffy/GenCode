@@ -1,4 +1,4 @@
-from gencode.core.context_handoff import HandoffAdapter, HandoffParser, HandoffSummary, render_handoff_summary
+from gencode.core.context.context_handoff import HandoffAdapter, HandoffParser, HandoffSummary, render_handoff_summary
 from gencode.testing import ScriptedModelClient
 
 

@@ -13,8 +13,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.context_budget_summary import context_budget_summary
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.context_budget_summary import context_budget_summary
+from gencode.core.context.context_manager import ContextManager
 from gencode.testing import ScriptedModelClient
 
 

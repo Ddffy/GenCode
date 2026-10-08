@@ -2,7 +2,7 @@ import json
 
 from gencode.testing import ScriptedModelClient
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.context_manager import ContextManager
 
 
 def build_agent(tmp_path, outputs=None, **kwargs):

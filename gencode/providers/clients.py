@@ -15,7 +15,7 @@ from http.client import RemoteDisconnected
 
 import httpx
 
-from ..core.content_blocks import ensure_model_input
+from ..core.runtime.model_io.content_blocks import ensure_model_input
 from .base import ModelResult, ModelStreamEvent
 from .errors import ProviderError, sanitize_url
 

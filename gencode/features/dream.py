@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..core.workspace import WorkspaceContext, clip
+from ..core.runtime.workspace_context import WorkspaceContext, clip
 
 DREAM_SESSION_CAP = 30
 DREAM_SESSION_CHARS = 5_000
@@ -196,7 +196,7 @@ def _release_lock(path):
 
 def run_dream(agent, *, quiet=False, session_ids=None, extra_notes=(), _reserved_lock=None):
     """Extract candidates using a restricted child runtime; never edits active records."""
-    from ..core.runtime import GenCode
+    from ..core.runtime.runtime import GenCode
 
     if session_ids is None:
         since = float(_load_state(agent).get("last_success_at", 0.0) or 0.0)

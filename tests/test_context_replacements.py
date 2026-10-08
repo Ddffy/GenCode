@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from gencode.core.context_replacements import commit_proposed_replacements
-from gencode.core.turn_history import TurnHistoryBuilder
+from gencode.core.context.context_replacements import commit_proposed_replacements
+from gencode.core.context.turn_history import TurnHistoryBuilder
 
 
 def fake_agent(history, context_replacements=None, changed_paths=None):

@@ -10,7 +10,7 @@ from ..config import (
     resolve_provider_config,
     resolve_vision_provider_config,
 )
-from ..core.model_router import ModelClientRouter
+from ..core.runtime.model_io.model_router import ModelClientRouter
 from .clients import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 
 

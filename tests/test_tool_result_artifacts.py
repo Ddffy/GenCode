@@ -6,9 +6,9 @@ import subprocess
 import sys
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.context_manager import ContextManager
-from gencode.core.run_store import RunStore
-from gencode.core.tool_result_artifacts import prepare_tool_result_observation
+from gencode.core.context.context_manager import ContextManager
+from gencode.core.runtime.persistence.run_store import RunStore
+from gencode.core.actions.tool_result_artifacts import prepare_tool_result_observation
 from gencode.testing import ScriptedModelClient
 from gencode.tools.base import RegisteredTool
 

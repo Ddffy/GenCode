@@ -5,8 +5,8 @@ import json
 from conftest import collect_events
 
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.task_state import TaskState
-from gencode.core.turn_transitions import emit_terminal_transition
+from gencode.core.runtime.task_state import TaskState
+from gencode.core.runtime.turn_transitions import emit_terminal_transition
 from gencode.providers import ProviderError
 from gencode.testing import ScriptedModelClient
 

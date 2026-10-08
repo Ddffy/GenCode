@@ -1,6 +1,6 @@
 from gencode import GenCode, SessionStore, WorkspaceContext
-from gencode.core.compact import CompactPlan
-from gencode.core.context_manager import ContextManager
+from gencode.core.context.compact import CompactPlan
+from gencode.core.context.context_manager import ContextManager
 from gencode.testing import ScriptedModelClient
 
 

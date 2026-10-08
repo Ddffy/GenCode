@@ -1,7 +1,7 @@
-from gencode.core.context_manager import SectionRender
-from gencode.core.context_sections import CURRENT_REQUEST_SECTION, REDUCTION_ORDER, SECTION_ORDER
-from gencode.core.context_report import ContextReportBuilder
-from gencode.core.context_usage import ContextUsageAnalyzer
+from gencode.core.context.context_manager import SectionRender
+from gencode.core.context.context_sections import CURRENT_REQUEST_SECTION, REDUCTION_ORDER, SECTION_ORDER
+from gencode.core.context.context_report import ContextReportBuilder
+from gencode.core.context.context_usage import ContextUsageAnalyzer
 
 
 class DummyAgent:

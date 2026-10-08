@@ -159,7 +159,7 @@ def test_plan_mode_tools_enter_and_exit_runtime_mode(tmp_path):
 def test_plan_path_accepts_absolute_path_inside_workspace(tmp_path):
     """模型偶尔给绝对路径，如 /Users/u/repo/.gencode/plans/foo —— 自动相对化，
     不应该让 agent 多走一次重试。"""
-    from gencode.core.plan_mode import _plan_path
+    from gencode.core.runtime.plan_mode import _plan_path
 
     assert (
         _plan_path("Student Mgmt", "/Users/u/repo/.gencode/plans/student-mgmt.md")

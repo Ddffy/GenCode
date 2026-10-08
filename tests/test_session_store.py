@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-import gencode.core.session_store as session_store_module
-from gencode.core.session_store import SessionStore
+import gencode.core.runtime.persistence.session_store as session_store_module
+from gencode.core.runtime.persistence.session_store import SessionStore
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only replace sharing semantics")

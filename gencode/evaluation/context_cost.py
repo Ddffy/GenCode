@@ -15,7 +15,7 @@ from types import MethodType
 
 from gencode import GenCode, SessionStore, WorkspaceContext
 from gencode.config import default_max_tokens_for_provider, resolve_provider_config
-from gencode.core.run_store import RunStore
+from gencode.core.runtime.persistence.run_store import RunStore
 from gencode.providers import AnthropicCompatibleModelClient, OpenAICompatibleModelClient
 from gencode.testing import ScriptedModelClient
 from .commands import portable_verifier_command
