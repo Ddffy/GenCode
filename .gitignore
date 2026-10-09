@@ -56,6 +56,8 @@ docs/**
 
 # Markdown files are kept locally but not uploaded to the repository
 *.md
+# The root README is the intentional public GitHub project page.
+!/README.md
 
 # Local image artifacts are kept locally but not uploaded
 *.png
